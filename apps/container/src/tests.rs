@@ -6,7 +6,7 @@ const HEADER: usize = 115;
 #[test]
 fn executable_payload_round_trip_rejects_modified_content_and_footer() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let root = fs::canonicalize(temp.path()).unwrap();
     let opener = root.join("opener.exe");
     let source = root.join("sample.txt");
     let bundle = root.join("delivery.exe");
