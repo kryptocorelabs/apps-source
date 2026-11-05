@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/Engine.cs" Link="Engine.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/Shell.cs" Link="Shell.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/Program.cs" Link="Program.cs" />
+    <Page Include="$(MSBuildThisFileDirectory)Shared/Theme.xaml" Link="Theme.xaml" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(DesktopEnginePath)' != ''">
+    <EmbeddedResource Include="$(DesktopEnginePath)" LogicalName="kryptocore-desktop-engine.exe" />
+  </ItemGroup>
+  <Target Name="RequireDesktopEngine" BeforeTargets="PrepareForBuild"
+          Condition="'$(PublishSingleFile)' == 'true'">
+    <Error Condition="!Exists('$(DesktopEnginePath)')" Text="Build the desktop engine and set DesktopEnginePath before publishing." />
+  </Target>
+</Project>

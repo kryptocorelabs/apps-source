@@ -1,0 +1,23 @@
+[package]
+name = "kryptocore"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local authenticated encryption and password-based key derivation"
+publish = false
+
+[lib]
+path = "rust/lib.rs"
+
+[workspace]
+members = ["apps/container", "apps/desktop/engine", "apps/msg"]
+resolver = "2"
+
+[dependencies]
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+getrandom = "0.3"
+zeroize = "1"
+
+[dev-dependencies]
+hex-literal = "0.4"

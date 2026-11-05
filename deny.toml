@@ -1,0 +1,16 @@
+# Leave targets unfiltered to include platform-specific dependencies.
+[graph]
+all-features = true
+
+[licenses]
+include-build = true
+include-dev = true
+# One allowed option can satisfy an OR expression. AND requires both.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    "NCSA",
+    "Unicode-3.0",
+]
+unused-allowed-license = "allow"

@@ -1,0 +1,10 @@
+/target/
+/dist/
+**/bin/
+**/obj/
+*.kcmi
+*.kcmi.*
+*.kcc
+*.kcv
+*.exe
+__pycache__/

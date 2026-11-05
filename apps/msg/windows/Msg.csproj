@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../desktop/windows/Desktop.props" />
+  <PropertyGroup>
+    <AssemblyName>KryptoCore-MSG</AssemblyName>
+    <Version>0.1.0-alpha.1</Version>
+    <ApplicationIcon>Assets/messenger.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets/messenger.png" />
+    <Resource Include="$(ApplicationIcon)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TorBundleRoot)' != ''">
+    <EmbeddedResource Include="$(TorBundleRoot)/tor/tor.exe" LogicalName="kryptocore-tor.exe" />
+    <EmbeddedResource Include="$(TorBundleRoot)/docs/tor.txt" LogicalName="Tor.License.txt" />
+    <EmbeddedResource Include="$(TorBundleRoot)/docs/libevent.txt" LogicalName="Tor.Libevent.txt" />
+    <EmbeddedResource Include="$(TorBundleRoot)/docs/openssl.txt" LogicalName="Tor.OpenSSL.txt" />
+    <EmbeddedResource Include="$(TorBundleRoot)/docs/zlib.txt" LogicalName="Tor.Zlib.txt" />
+  </ItemGroup>
+  <Target Name="RequireTorBundle" BeforeTargets="PrepareForBuild" Condition="'$(PublishSingleFile)' == 'true'">
+    <Error Condition="!Exists('$(TorBundleRoot)/tor/tor.exe')" Text="Set TorBundleRoot to the verified, extracted Tor Expert Bundle." />
+  </Target>
+</Project>
