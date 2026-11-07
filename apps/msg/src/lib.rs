@@ -2,12 +2,12 @@
 
 pub mod chat;
 pub mod contact;
-pub mod contact_request;
 mod contact_book;
+pub mod contact_request;
 pub use contact_book::ContactBook;
 mod dh;
 mod file;
-pub use file::{save_received_file, send_file, MAX_FILE_SIZE};
+pub use file::{save_received_file, save_received_file_as, send_file, MAX_FILE_SIZE};
 pub mod pairing;
 pub mod presence;
 #[cfg(test)]

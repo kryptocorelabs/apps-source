@@ -21,6 +21,9 @@ enum Command {
     File { path: PathBuf },
     Folder { path: PathBuf },
     Status { enabled: bool },
+    SaveDownload { id: u64, path: PathBuf },
+    DownloadFolder { id: u64, path: PathBuf },
+    RejectDownload { id: u64 },
 }
 
 fn emit(frame: &impl Serialize) -> io::Result<()> {
@@ -39,16 +42,24 @@ struct TextEvent<'a> {
 struct Attachment {
     name: String,
     remaining: usize,
-    destination: Option<(PathBuf, Zeroizing<Vec<u8>>)>,
+    bytes: Zeroizing<Vec<u8>>,
+}
+
+struct Download {
+    id: u64,
+    name: String,
+    bytes: Zeroizing<Vec<u8>>,
 }
 
 fn read_channel(
     channel: &msg::chat::Channel,
     folder: &Mutex<Option<PathBuf>>,
     pending: &AtomicBool,
+    download: &Mutex<Option<Download>>,
 ) -> Result<(), msg::Error> {
     use msg::chat::Event;
     let mut attachment: Option<Attachment> = None;
+    let mut next_download = 0u64;
     channel.read(|event| {
         match event {
             Event::Text(text) if attachment.is_none() => {
@@ -56,19 +67,18 @@ fn read_channel(
                 channel.receipt(true)?;
             }
             Event::File { name, size } if attachment.is_none() => {
-                let selected = folder.lock().map_err(|_| msg::Error::Protocol)?.clone();
+                if download.lock().map_err(|_| msg::Error::Protocol)?.is_some() {
+                    return Err(msg::Error::Protocol);
+                }
                 attachment = Some(Attachment {
-                    name: name.into(),
-                    remaining: size,
-                    destination: selected.map(|path| (path, Zeroizing::new(Vec::with_capacity(size)))),
+                    name: name.into(), remaining: size,
+                    bytes: Zeroizing::new(Vec::with_capacity(size)),
                 });
             }
             Event::Data(bytes) => {
                 let file = attachment.as_mut().ok_or(msg::Error::Protocol)?;
                 file.remaining = file.remaining.checked_sub(bytes.len()).ok_or(msg::Error::File)?;
-                if let Some((_, buffer)) = &mut file.destination {
-                    buffer.extend_from_slice(bytes);
-                }
+                file.bytes.extend_from_slice(bytes);
             }
             Event::Receipt(ok) if pending.swap(false, Ordering::AcqRel) => {
                 emit(&json!({ "event": "chat_receipt", "ok": ok }))?;
@@ -80,20 +90,73 @@ fn read_channel(
         }
         if attachment.as_ref().is_some_and(|file| file.remaining == 0) {
             let file = attachment.take().ok_or(msg::Error::Protocol)?;
-            let saved = file.destination.and_then(|(folder, bytes)| {
-                msg::save_received_file(&folder, &file.name, &bytes).ok()
-            });
-            emit(&json!({
-                "event": "chat_file",
-                "saved_file": saved,
-                "message": if saved.is_some() { "Datei gespeichert." } else {
-                    "Datei nicht gespeichert. Wähle einen Empfangsordner und prüfe, ob der Dateiname schon vorhanden ist."
-                },
-            }))?;
-            channel.receipt(saved.is_some())?;
+            let selected = folder.lock().map_err(|_| msg::Error::Protocol)?.clone();
+            let saved = selected.and_then(|folder| msg::save_received_file(&folder, &file.name, &file.bytes).ok());
+            if let Some(path) = saved {
+                emit(&json!({ "event": "chat_file", "saved_file": path, "message": "Datei gespeichert." }))?;
+                channel.receipt(true)?;
+            } else {
+                next_download += 1;
+                let id = next_download;
+                let size = file.bytes.len();
+                let name = file.name.clone();
+                *download.lock().map_err(|_| msg::Error::Protocol)? =
+                    Some(Download { id, name: file.name, bytes: file.bytes });
+                emit(&json!({ "event": "chat_download", "id": id, "name": name, "size": size }))?;
+            }
         }
         Ok(())
     })
+}
+
+fn save_download(
+    channel: &msg::chat::Channel,
+    download: &Mutex<Option<Download>>,
+    folder: &Mutex<Option<PathBuf>>,
+    id: u64,
+    path: Option<PathBuf>,
+    use_folder: bool,
+) -> Result<(), msg::Error> {
+    let mut pending = download.lock().map_err(|_| msg::Error::Protocol)?;
+    let Some(file) = pending.as_ref().filter(|file| file.id == id) else {
+        emit(&json!({ "event": "chat_download_expired", "id": id }))?;
+        return Ok(());
+    };
+    let Some(path) = path else {
+        pending.take();
+        channel.receipt(false)?;
+        emit(&json!({ "event": "chat_download_closed", "id": id }))?;
+        return Ok(());
+    };
+    if !path.is_absolute() {
+        emit(
+            &json!({ "event": "chat_download_error", "id": id, "message": "Wähle einen vollständigen Speicherpfad." }),
+        )?;
+        return Ok(());
+    }
+    let saved = if use_folder {
+        msg::save_received_file(&path, &file.name, &file.bytes)
+    } else {
+        msg::save_received_file_as(&path, &file.bytes)
+    };
+    match saved {
+        Ok(saved) => {
+            if use_folder {
+                *folder.lock().map_err(|_| msg::Error::Protocol)? = Some(path);
+                emit_progress(true, "chat_folder");
+            }
+            pending.take();
+            channel.receipt(true)?;
+            emit(
+                &json!({ "event": "chat_file", "id": id, "saved_file": saved, "message": "Datei gespeichert." }),
+            )?;
+        }
+        Err(_) => {
+            emit(&json!({ "event": "chat_download_error", "id": id,
+                "message": "Speichern fehlgeschlagen. Wähle einen anderen Namen oder Ordner. Vorhandene Dateien werden beibehalten." }))?;
+        }
+    }
+    Ok(())
 }
 
 fn connect(
@@ -178,6 +241,7 @@ pub(super) fn run(
     drop(identity);
     let folder = Arc::new(Mutex::new(None));
     let pending = Arc::new(AtomicBool::new(false));
+    let download = Arc::new(Mutex::new(None));
     emit_progress(true, "chat_connected");
     let reader = {
         let (channel, folder, pending) = (
@@ -185,7 +249,8 @@ pub(super) fn run(
             Arc::clone(&folder),
             Arc::clone(&pending),
         );
-        thread::spawn(move || read_channel(&channel, &folder, &pending))
+        let download = Arc::clone(&download);
+        thread::spawn(move || read_channel(&channel, &folder, &pending, &download))
     };
     let result = (|| {
         while !reader.is_finished() && !stopped.load(Ordering::Acquire) {
@@ -196,6 +261,18 @@ pub(super) fn run(
             };
             let command = serde_json::from_slice(&frame).map_err(|_| msg::Error::Protocol)?;
             let sent = match command {
+                Command::SaveDownload { id, path } => {
+                    save_download(&channel, &download, &folder, id, Some(path), false)?;
+                    continue;
+                }
+                Command::DownloadFolder { id, path } => {
+                    save_download(&channel, &download, &folder, id, Some(path), true)?;
+                    continue;
+                }
+                Command::RejectDownload { id } => {
+                    save_download(&channel, &download, &folder, id, None, false)?;
+                    continue;
+                }
                 Command::Folder { path } if path.is_absolute() && path.is_dir() => {
                     *folder.lock().map_err(|_| msg::Error::Protocol)? = Some(path);
                     emit_progress(true, "chat_folder");

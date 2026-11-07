@@ -29,13 +29,26 @@ pub fn save_received_file(
     }
     // The prefix also keeps Windows device names such as NUL out of the destination.
     let path = folder.join(format!("MSG-{name}"));
+    save_received_file_as(&path, bytes)
+}
+
+/// Save to a user-selected path without replacing an existing file.
+pub fn save_received_file_as(path: &Path, bytes: &[u8]) -> io::Result<std::path::PathBuf> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    if !valid_name(name) || bytes.len() as u64 > MAX_FILE_SIZE {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let folder = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let mut stage = tempfile::NamedTempFile::new_in(folder)?;
     stage.write_all(bytes)?;
     stage.as_file().sync_all()?;
     stage
         .persist_noclobber(&path)
         .map_err(|error| error.error)?;
-    Ok(path)
+    Ok(path.to_owned())
 }
 
 pub(super) fn valid_name(name: &str) -> bool {

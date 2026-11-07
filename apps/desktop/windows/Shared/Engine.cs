@@ -23,7 +23,11 @@ internal sealed record Reply(
 
 internal static class Engine
 {
+#if RESCUE_APP
+    private const string BinaryName = "kryptocore-rescue.exe";
+#else
     private const string BinaryName = "kryptocore-desktop-engine.exe";
+#endif
     private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
     internal static async Task<Reply> Call(object request, byte[]? first = null,

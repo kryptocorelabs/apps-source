@@ -20,6 +20,19 @@ impl ContactBook {
         Self::open_store(identity_path, identity, ".contacts", b"KCMB v1 contacts")
     }
 
+    pub fn blocked(identity_path: &Path, identity: &Identity) -> Result<Self> {
+        Self::open_store(identity_path, identity, ".blocked", b"KCMB v1 blocked!")
+    }
+
+    pub fn verification(identity_path: &Path, identity: &Identity) -> Result<Self> {
+        Self::open_store(
+            identity_path,
+            identity,
+            ".verification",
+            b"KCMB v1 verify!!",
+        )
+    }
+
     pub fn require_two_codes(identity_path: &Path, identity: &Identity) -> Result<bool> {
         let mut path = identity_path.as_os_str().to_owned();
         path.push(".policy");

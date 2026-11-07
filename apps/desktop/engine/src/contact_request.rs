@@ -1,10 +1,13 @@
-use super::{contact_outcome, emit_progress, format_key, msg, read_frame, Outcome, Target};
+use super::{
+    contact_outcome, emit_progress, format_key, msg, parse_key, read_frame, Outcome, Target,
+};
 use msg::{contact::Contact, contact_request as request, tor::OnionTarget};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
     io::{self, Write},
     net::{Ipv4Addr, TcpListener},
+    path::Path,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -15,9 +18,48 @@ use std::{
 struct Decision {
     id: u64,
     accept: bool,
+    #[serde(default)]
+    block: bool,
 }
 
-pub(super) fn listen(identity: &msg::Identity) -> Result<Outcome, String> {
+fn read_blocked(store: &msg::ContactBook) -> Result<Vec<String>, String> {
+    let keys: Vec<String> = serde_json::from_slice(
+        &store
+            .read()
+            .map_err(|_| "Die Blockierliste konnte nicht gelesen werden.")?,
+    )
+    .map_err(|_| "Die Blockierliste ist beschädigt.")?;
+    if keys.len() > 256 || keys.iter().any(|key| parse_key(key).is_err()) {
+        return Err("Die Blockierliste ist ungültig.".into());
+    }
+    Ok(keys)
+}
+
+pub(super) fn blocked_contacts(
+    path: &Path,
+    identity: &msg::Identity,
+    remove: Option<&str>,
+) -> Result<Outcome, String> {
+    let store = msg::ContactBook::blocked(path, identity)
+        .map_err(|_| "Die Blockierliste ist nicht verfügbar.")?;
+    let mut keys = read_blocked(&store)?;
+    if let Some(key) = remove {
+        let key = format_key(&parse_key(key).map_err(|_| "Ungültiger Kontaktschlüssel.")?);
+        keys.retain(|blocked| blocked != &key);
+        store
+            .write(&serde_json::to_vec(&keys).map_err(|_| "Ungültige Blockierliste.")?)
+            .map_err(|_| "Die Blockierliste konnte nicht gespeichert werden.")?;
+    }
+    Ok(Outcome::text(
+        "Blockierte Kontakte geladen.",
+        zeroize::Zeroizing::new(
+            serde_json::to_string(&keys).map_err(|_| "Ungültige Blockierliste.")?,
+        ),
+    ))
+}
+
+pub(super) fn listen(path: &Path, identity: &msg::Identity) -> Result<Outcome, String> {
+    blocked_contacts(path, identity, None)?;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, request::PORT))
         .map_err(|_| "Kontaktanfragen sind bereits in einem MSG-Fenster aktiv.")?;
     listener
@@ -48,7 +90,21 @@ pub(super) fn listen(identity: &msg::Identity) -> Result<Outcome, String> {
                     .map_err(|error| error.to_string())?;
                 id += 1;
                 let mut shown = false;
+                let mut block_error = false;
+                let mut blocked_now = false;
                 let result = request::receive(&mut stream, identity, |contact, timeout| {
+                    let key = format_key(&contact.key);
+                    let Ok(store) = msg::ContactBook::blocked(path, identity) else {
+                        return false;
+                    };
+                    let Ok(mut blocked) = read_blocked(&store) else {
+                        return false;
+                    };
+                    if blocked.contains(&key) {
+                        return false;
+                    }
+                    // Release the file lock while waiting for the user's decision.
+                    drop(store);
                     let frame = json!({
                         "event": "incoming_request", "id": id, "key": format_key(&contact.key),
                         "address": contact.endpoint().map(ToString::to_string),
@@ -70,11 +126,32 @@ pub(super) fn listen(identity: &msg::Identity) -> Result<Outcome, String> {
                         decisions.recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     {
                         if decision.id == id {
+                            if !decision.accept && decision.block {
+                                let saved = (|| {
+                                    let store = msg::ContactBook::blocked(path, identity).ok()?;
+                                    blocked = read_blocked(&store).ok()?;
+                                    if !blocked.contains(&key) {
+                                        blocked.push(key.clone());
+                                    }
+                                    if blocked.len() > 256 {
+                                        return None;
+                                    }
+                                    store.write(&serde_json::to_vec(&blocked).ok()?).ok()
+                                })();
+                                block_error = saved.is_none();
+                                blocked_now = saved.is_some();
+                            }
                             return decision.accept;
                         }
                     }
                     false
                 });
+                if block_error {
+                    emit_progress(true, "request_block_error");
+                }
+                if blocked_now {
+                    emit_progress(true, "request_blocked");
+                }
                 if shown {
                     emit_progress(true, "request_cleared");
                 }

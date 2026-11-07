@@ -2,6 +2,41 @@ use super::*;
 use std::{net::TcpListener, thread};
 
 #[test]
+fn contact_trust_and_blocks_are_separate_identity_bound_stores() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("alice.kcmi");
+    let alice = Identity::generate().unwrap();
+    let contacts = ContactBook::open(&path, &alice).unwrap();
+    let blocks = ContactBook::blocked(&path, &alice).unwrap();
+    let trust = ContactBook::verification(&path, &alice).unwrap();
+    contacts.write(b"original contacts").unwrap();
+    blocks.write(b"blocked identity").unwrap();
+    trust.write(b"unverified identity").unwrap();
+    assert_eq!(contacts.read().unwrap().as_slice(), b"original contacts");
+    assert_eq!(blocks.read().unwrap().as_slice(), b"blocked identity");
+    assert_eq!(trust.read().unwrap().as_slice(), b"unverified identity");
+    drop(blocks);
+    let other = ContactBook::blocked(&path, &Identity::generate().unwrap()).unwrap();
+    assert!(other.read().is_err());
+    drop(other);
+    fs::copy(
+        temp.path().join("alice.kcmi.blocked"),
+        temp.path().join("alice.kcmi.verification"),
+    )
+    .unwrap();
+    assert!(trust.read().is_err());
+}
+
+#[test]
+fn received_file_can_use_a_chosen_name_without_overwriting_existing_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("chosen.bin");
+    save_received_file_as(&path, b"first").unwrap();
+    assert!(save_received_file_as(&path, b"replacement").is_err());
+    assert_eq!(fs::read(path).unwrap(), b"first");
+}
+
+#[test]
 fn onion_contact_request_requires_a_decision_and_returns_the_accepted_key() {
     let alice = Identity::generate().unwrap();
     let bob = Identity::generate().unwrap();
@@ -366,5 +401,78 @@ fn chat_rejects_an_unknown_key_and_carries_a_reply_on_the_same_socket() {
         Ok(())
     });
     assert!(received && confirmed);
+    server.join().unwrap();
+}
+
+#[test]
+fn chat_does_not_open_without_a_valid_encrypted_confirmation() {
+    let alice = Identity::generate().unwrap();
+    let bob = Identity::generate().unwrap();
+    let alice_key = alice.public();
+    let bob_key = bob.public();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().unwrap();
+            assert!(chat::Channel::open(socket, &bob, &alice_key, false).is_err());
+        }
+    });
+    for corrupt_confirmation in [false, true] {
+        let mut socket = TcpStream::connect(address).unwrap();
+        let mut connection = Connection::new(&mut socket);
+        let mut state = connection
+            .handshake_for(&alice, &bob_key, true, b"KryptoCore MSG chat v1")
+            .unwrap();
+        if corrupt_confirmation {
+            let mut sealed = [0; 17];
+            let length = state.write_message(&[0], &mut sealed).unwrap();
+            sealed[length - 1] ^= 1;
+            connection.write_frame(&sealed[..length]).unwrap();
+        }
+        drop(connection);
+        drop(socket);
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn chat_never_delivers_tampered_ciphertext_to_its_callback() {
+    let alice = Identity::generate().unwrap();
+    let bob = Identity::generate().unwrap();
+    let alice_key = alice.public();
+    let bob_key = bob.public();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let channel = chat::Channel::open(socket, &bob, &alice_key, false).unwrap();
+        let mut callbacks = 0;
+        assert!(channel
+            .read(|_| {
+                callbacks += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(callbacks, 0);
+        channel.close();
+    });
+    let mut socket = TcpStream::connect(address).unwrap();
+    let mut connection = Connection::new(&mut socket);
+    let mut state = connection
+        .handshake_for(&alice, &bob_key, true, b"KryptoCore MSG chat v1")
+        .unwrap();
+    let mut sealed = [0; 64];
+    let length = state.write_message(&[0], &mut sealed).unwrap();
+    connection.write_frame(&sealed[..length]).unwrap();
+    connection.read_frame(&mut sealed[..17], 17).unwrap();
+    let mut plain = [0];
+    assert_eq!(state.read_message(&sealed[..17], &mut plain).unwrap(), 1);
+    assert_eq!(plain, [0]);
+    let length = state
+        .write_message(b"\x01synthetic text", &mut sealed)
+        .unwrap();
+    sealed[length - 1] ^= 1;
+    connection.write_frame(&sealed[..length]).unwrap();
     server.join().unwrap();
 }

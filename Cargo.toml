@@ -10,7 +10,7 @@ publish = false
 path = "rust/lib.rs"
 
 [workspace]
-members = ["apps/container", "apps/desktop/engine", "apps/msg"]
+members = ["apps/container", "apps/desktop/engine", "apps/msg", "apps/rescue", "modules/signatures", "modules/vault-format"]
 resolver = "2"
 
 [dependencies]

@@ -34,18 +34,19 @@ internal sealed class MsgWindow : Shell
     private SecureString? identitySecret;
     private CancellationTokenSource? chatSession;
     private CancellationTokenSource? contactRequestSession;
+    private bool contactRequestsReady;
     private readonly TextBlock profileName = Text("Keine Identität geöffnet", 13, true);
     private readonly TextBlock contactState = Text("Kein Kontakt verbunden", 13, true);
     private readonly TextBlock transportState = Text("TOR", 12);
     private readonly TextBlock linkState = Text("Keine aktive Verbindung", 14);
-    private readonly TextBlock linkDetail = Text("Wählt euren Kontakt und öffnet den Chatkanal auf beiden Geräten.", 12, true);
+    private readonly TextBlock linkDetail = Text("Füge einen Kontakt hinzu oder teile deine Adresse für eine Anfrage.", 12, true);
     private readonly TextBox onionAddress = new() { IsReadOnly = true };
     private readonly TextBox publicAddress = new() { MaxLength = 64 };
     private readonly TextBox localAddress = new() { Text = LocalAddress, MaxLength = 64 };
     private readonly TextBox manualAddress = new() { MaxLength = 64 };
     private readonly TextBox manualKey = new() { MaxLength = 64, FontFamily = new FontFamily("Consolas") };
     private readonly CheckBox verified = new() { Content = "Schlüssel persönlich abgeglichen", Margin = new Thickness(0, 8, 0, 4) };
-    private readonly TextBox draft = new() { TextWrapping = TextWrapping.Wrap, MaxLength = 4096, MinHeight = 72 };
+    private readonly TextBox draft = new() { TextWrapping = TextWrapping.Wrap, MaxLength = 4096, MinHeight = 44, MaxHeight = 90, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly StackPanel timeline = new();
     private readonly List<FrameworkElement> bubbles = [];
     private Action showChat = null!;
@@ -57,22 +58,44 @@ internal sealed class MsgWindow : Shell
     private Action refreshContactRequests = () => { };
     private Action clearContact = () => { };
     private Action clearInvitation = () => { };
+    private Action startConversation = () => { };
+    private Func<Task> stopConversation = () => Task.CompletedTask;
+    private Action shareMyAddress = () => { };
+    private Func<string, string?, Task> requestChat = (_, _) => Task.CompletedTask;
+    private Task activeChat = Task.CompletedTask;
+    private readonly SemaphoreSlim contactSelection = new(1, 1);
+    private bool contactSaved;
+    private long identitySession;
+    private readonly SessionConversations conversations = new();
+    private readonly Dictionary<string, SavedContact> knownContacts = new(StringComparer.OrdinalIgnoreCase);
+    private ConversationSidebar? sidebar;
+    private string? displayedPeer;
+    private bool restoringConversation;
+    private double bubbleWidth = 520;
+    private readonly ConnectionIndicator encryptionIndicator = new();
     private Func<Task> loadContacts = () => Task.CompletedTask;
+    private Action resetContactList = () => { };
     private FrameworkElement invitationSettings = null!;
     private Action showRequestOptions = () => { };
     private sealed record SavedContact(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("key")] string Key,
-        [property: JsonPropertyName("address")] string? Address);
+        [property: JsonPropertyName("address")] string? Address,
+        [property: JsonPropertyName("verified")] bool Verified = false);
     private sealed record OutgoingInvitation(string Label, string Code, byte[] Ticket);
 
-    internal MsgWindow() : base("MSG", "Ein Kontakt. Eine verschlüsselte Verbindung.",
-        ProductEmblem("KryptoCore-MSG;component/Assets/messenger.png"), "KryptoCore-MSG;component/Assets/messenger.ico")
+    internal MsgWindow() : base("MSG", "Deine Kontakte. Eure Gespräche.",
+        PrepareAppearance(), "KryptoCore-MSG;component/Assets/messenger.ico")
     {
-        showChat = Tab("Nachrichten", ChatView());
-        showContacts = Tab("Kontakte", contactPage, () => _ = loadContacts());
+        MinWidth = 880;
+        MinHeight = 600;
+        Width = Math.Max(MinWidth, Math.Min(1180, SystemParameters.WorkArea.Width - 32));
+        Height = Math.Max(MinHeight, Math.Min(850, SystemParameters.WorkArea.Height - 32));
+        showChat = Tab("Nachrichten", ChatView(), () => Dispatcher.BeginInvoke(new Action(() => _ = loadContacts())));
+        showContacts = Tab("Kontakte", contactPage, () => Dispatcher.BeginInvoke(new Action(() => _ = loadContacts())));
         showProfile = Tab("Mein Profil", ProfileView());
         showSettings = Tab("Einstellungen", SettingsView());
+        SetLayout((navigation, page, status) => MessengerFrame.Create(this, navigation, page, status));
         Closed += (_, _) =>
         {
             ClearTicket(ref incomingTicket);
@@ -81,14 +104,28 @@ internal sealed class MsgWindow : Shell
             contactRequestSession?.Cancel();
             identitySecret?.Dispose();
             managedTor.Dispose();
+            ClearSessionConversations();
         };
         refresh();
     }
 
+    private static Brush PrepareAppearance()
+    {
+        MessengerFrame.ApplyTheme();
+        return ProductEmblem("KryptoCore-MSG;component/Assets/messenger.png");
+    }
+
+    private static new Border Card(FrameworkElement content) => new()
+    {
+        Background = Brush("Card"), BorderBrush = Brush("Line"), BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(22), Padding = new Thickness(20),
+        Margin = new Thickness(0, 0, 12, 0), Child = content
+    };
+
     private FrameworkElement ChatView()
     {
         var page = new StackPanel();
-        var start = Section("KryptoCore Messenger", "Öffne deine Identität oder lege eine neue an. Danach kannst du einen Kontaktcode übernehmen.");
+        var start = Section("KryptoCore Messenger", "Öffne deine Identität oder lege eine neue an. Danach kannst du deine Adresse teilen oder jemanden zum Chat anfragen.");
         ((TextBlock)start.Children[0]).FontSize = 26;
         start.Children.Add(Row(Button("Identität einrichten", () => showProfile(), true)));
         var welcome = Card(start);
@@ -98,8 +135,8 @@ internal sealed class MsgWindow : Shell
         onboarding.Children.Add(welcome);
         var steps = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Rows = 1 };
         steps.Children.Add(Card(Section("01 · Profil", "Identität erstellen oder öffnen.")));
-        steps.Children.Add(Card(Section("02 · Kontakt", "Eine Einladung erstellen oder eine erhaltene öffnen.")));
-        steps.Children.Add(Card(Section("03 · Chat", "Öffnet den Chatkanal auf beiden Geräten.")));
+        steps.Children.Add(Card(Section("02 · Kontakt", "Adresse teilen oder einen Kontakt hinzufügen.")));
+        steps.Children.Add(Card(Section("03 · Chat", "Anfrage annehmen und direkt schreiben.")));
         onboarding.Children.Add(steps);
         page.Children.Add(onboarding);
 
@@ -138,8 +175,7 @@ internal sealed class MsgWindow : Shell
                 }
                 if (peerKey != reply.Text)
                 {
-                    draft.Clear();
-                    ClearTimeline();
+                    LeaveConversation();
                 }
                 manualKey.Clear();
                 manualAddress.Clear();
@@ -152,6 +188,7 @@ internal sealed class MsgWindow : Shell
                 ClearTicket(ref incomingTicket);
                 if (reply.Ticket is { } ticket) incomingTicket = Engine.TextBytes(ticket);
                 verified.IsChecked = false;
+                RestoreConversation();
                 SetLink("Kontaktcode geöffnet", incomingTicket is not null
                     ? "Klicke auf „Einladung annehmen“."
                     : encryptedInvitation
@@ -207,28 +244,51 @@ internal sealed class MsgWindow : Shell
             DisplayMemberPath = nameof(SavedContact.Name), MinHeight = 110, MaxHeight = 220
         });
         contactBook.Children.Add(Row(Button("Aktualisieren", async () => await UpdateContacts())));
-        var openSaved = Button("Auswählen", () =>
+        var openSaved = Button("Auswählen", async () =>
         {
             if (savedContacts.SelectedItem is not SavedContact item) return;
-            chatSession?.Cancel();
+            await OpenSavedContact(item);
+        });
+        async Task OpenSavedContact(SavedContact item)
+        {
+            if (string.Equals(item.Key, ActivePeer, StringComparison.OrdinalIgnoreCase)
+                && chatSession is { IsCancellationRequested: false })
+            {
+                showChat();
+                return;
+            }
+            if (!direct && requireTwoCodes)
+            {
+                showContacts();
+                SetStatus("Diese Identität verlangt gegenseitige Kontaktcodes. Öffne den Code der anderen Person unter Kontakte.");
+                return;
+            }
+            string? path = identityPath;
+            long session = identitySession;
+            await stopConversation();
+            if (path is null || identityPath != path || identitySecret is null || session != identitySession) return;
+            LeaveConversation();
             ClearTicket(ref incomingTicket);
-            encryptedInvitation = false;
+            encryptedInvitation = true;
             verified.IsChecked = false;
             code.Clear();
             codePassword.Clear();
             manualKey.Clear();
             manualAddress.Clear();
-            draft.Clear();
-            ClearTimeline();
             peerKey = item.Key;
             peerAddress = item.Address;
             peerName = item.Name;
             contactOpened = true;
-            verified.IsChecked = true;
+            encryptedInvitation = true;
+            contactSaved = true;
+            verified.IsChecked = item.Verified;
+            RestoreConversation();
             SetStatus($"Kontakt ausgewählt · {item.Name}");
             refresh();
             showChat();
-        });
+            if (!direct && item.Address is { } address) await requestChat(address, item.Key);
+            else startConversation();
+        }
         var removeSaved = Button("Entfernen", async () =>
         {
             if (savedContacts.SelectedItem is SavedContact item)
@@ -239,13 +299,10 @@ internal sealed class MsgWindow : Shell
         var contactName = Field(savePanel, "Name für den bestätigten Kontakt", new TextBox { MaxLength = 120 });
         var saveContact = Button("Kontakt speichern", async () =>
         {
-            if (verified.IsChecked != true || ActivePeer is not { } key) return;
-            string? address = direct && manualKey.Text.Trim().Length > 0 ? SendAddress : peerAddress;
-            var item = new SavedContact(contactName.Text, key, address);
-            await UpdateContacts(new { kind = "save", contact = item });
+            await SaveActiveContact(contactName.Text);
         });
         savePanel.Children.Add(Row(saveContact));
-        var saveHint = Text("Zum Speichern gib einen Namen ein und gleiche den Schlüssel mit der Person ab.", 12, true);
+        var saveHint = Text("Gib einen Namen ein. Den Schlüssel kannst du zusätzlich persönlich abgleichen.", 12, true);
         savePanel.Children.Add(saveHint);
         var saveOptions = new Expander { Header = "Ausgewählten Kontakt speichern", Content = savePanel, Margin = new Thickness(0, 12, 0, 0) };
         contactBook.Children.Add(saveOptions);
@@ -254,28 +311,64 @@ internal sealed class MsgWindow : Shell
         {
             if (identityPath is not null && identityPath != loadedForIdentity) await UpdateContacts();
         };
+        resetContactList = () =>
+        {
+            savedContacts.ItemsSource = null;
+            loadedForIdentity = null;
+        };
 
-        async Task UpdateContacts(object? update = null, string? removedKey = null)
+        async Task UpdateContacts(object? update = null, string? removedKey = null, SavedContact? saved = null)
         {
             await Run("Kontaktliste wird geöffnet …", token =>
                 Engine.Call(new { action = "contacts", path = identityPath, update }, IdentityPassword(), cancellation: token),
                 reply =>
                 {
-                    savedContacts.ItemsSource = JsonSerializer.Deserialize<SavedContact[]>(reply.Text ?? "[]");
+                    var loaded = JsonSerializer.Deserialize<SavedContact[]>(reply.Text ?? "[]") ?? [];
+                    savedContacts.ItemsSource = loaded;
+                    knownContacts.Clear();
+                    foreach (var item in loaded) knownContacts[item.Key] = item;
                     loadedForIdentity = identityPath;
+                    if (saved is not null && string.Equals(saved.Key, ActivePeer, StringComparison.OrdinalIgnoreCase))
+                    {
+                        peerName = saved.Name;
+                        contactSaved = true;
+                    }
                     if (removedKey is not null && string.Equals(removedKey, ActivePeer, StringComparison.OrdinalIgnoreCase))
                     {
+                        contactSaved = false;
                         verified.IsChecked = false;
                     }
                     refresh();
                 }, canCancel: true);
         }
 
-        var chat = Section("Unterhaltung", "Im offenen Chatkanal könnt ihr beide schreiben und Dateien senden.");
-        var selectedContact = Text("Kein Kontakt ausgewählt", 15);
+        async Task SaveActiveContact(string name)
+        {
+            if (!ContactAccepted || ActivePeer is not { } key) return;
+            name = name.Trim();
+            if (name.Length == 0) return;
+            string? address = direct && manualKey.Text.Trim().Length > 0 ? SendAddress : peerAddress;
+            var item = new SavedContact(name, key, address, verified.IsChecked == true);
+            await UpdateContacts(new { kind = "save", contact = item }, saved: item);
+        }
+
+        var chat = Section("Nachrichten", "Eine angenommene Anfrage öffnet euren Chat automatisch.");
+        var selectedContact = Text("Kein Kontakt ausgewählt", 19);
+        selectedContact.FontWeight = FontWeights.SemiBold;
         chat.Children.Add(selectedContact);
-        var chooseContact = Button("Kontakt auswählen", () => showContacts());
-        chat.Children.Add(Row(chooseContact));
+        var chatSavePanel = new StackPanel { Visibility = Visibility.Collapsed };
+        var chatContactName = Field(chatSavePanel, "Wie heißt der Kontakt?", new TextBox { MaxLength = 120 });
+        var confirmChatContact = Button("Speichern", async () =>
+        {
+            await SaveActiveContact(chatContactName.Text);
+            if (contactSaved) chatSavePanel.Visibility = Visibility.Collapsed;
+        }, true);
+        chatSavePanel.Children.Add(Row(confirmChatContact, Button("Abbrechen", () => chatSavePanel.Visibility = Visibility.Collapsed)));
+        var endChat = Button("Chat beenden", () => chatSession?.Cancel());
+        var saveChatContact = Button("Kontakt übernehmen", () => { chatSavePanel.Visibility = Visibility.Visible; chatContactName.Focus(); });
+        var chatActions = Row(saveChatContact, endChat);
+        chat.Children.Add(chatActions);
+        chat.Children.Add(chatSavePanel);
         var badges = new StackPanel { Orientation = Orientation.Horizontal };
         badges.Children.Add(Badge(transportState));
         chat.Children.Add(badges);
@@ -290,8 +383,9 @@ internal sealed class MsgWindow : Shell
             CornerRadius = new CornerRadius(9), Padding = new Thickness(10),
             Margin = new Thickness(0, 8, 0, 0), Child = link
         });
-        var empty = Text("Hier erscheinen gesendete und empfangene Nachrichten.", 13, true);
-        empty.Margin = new Thickness(6, 10, 6, 10);
+        var empty = Text("Öffne links einen Chat.\nOder füge einen neuen Kontakt hinzu.", 18, true);
+        empty.TextAlignment = TextAlignment.Center;
+        empty.Margin = new Thickness(20, 30, 20, 30);
         timeline.Children.Add(empty);
         var history = new ScrollViewer { Content = timeline, Height = 172, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         chat.Children.Add(new Border
@@ -313,7 +407,8 @@ internal sealed class MsgWindow : Shell
             }, _ =>
             {
                 ClearTicket(ref incomingTicket);
-                SetLink("Einladung angenommen", "Öffnet jetzt den Chatkanal auf beiden Geräten.", "Mint");
+                SetLink("Einladung angenommen", "Der Chat öffnet sich automatisch.", "Mint");
+                startConversation();
                 showChat();
                 refresh();
             }, canCancel: true);
@@ -323,40 +418,31 @@ internal sealed class MsgWindow : Shell
         Func<object, Task>? channelInput = null;
         string? channelPeer = null;
         bool connected = false;
+        bool connectionFailed = false;
         bool localStatus = false;
         bool peerStatus = false;
         bool folderReady = false;
+        long? downloadId = null;
+        string downloadName = "";
+        long downloadSize = 0;
+        MsgPrompt? downloadPrompt = null;
         bool writing = false;
         (string Content, string? Draft, CancellationTokenSource Timeout)? pending = null;
 
-        var channelButton = Button("Chatkanal öffnen", async () =>
+        var channelButton = Button("Chat starten", () =>
         {
-            if (chatSession is { } active)
-            {
-                active.Cancel();
-                return;
-            }
-            if (identityPath is not { } path || ActivePeer is not { } peer || SendAddress is not { } address
-                || !ContactAccepted) return;
-            string local = LocalAddress;
-            TorRuntime.Endpoint? endpoint = null;
-            await Run("Chatkanal wird vorbereitet …", async token =>
-            {
-                if (direct) local = Endpoint(localAddress);
-                else endpoint = await EnsureTorAsync(token, showLink: true);
-                return new Reply(true, "Chatkanal wird geöffnet.", null, null, null);
-            }, reply => _ = OpenChannel(new
-            {
-                action = "chat", path, peer, address, local, tor = !direct, socks_port = endpoint?.SocksPort
-            }, peer), canCancel: true);
+            if (chatSession is { } active) active.Cancel();
+            else startConversation();
         }, true);
         chat.Children.Add(Row(channelButton));
 
         var send = Button("Senden", async () => await SendAsync(null), true);
         draft.KeyDown += async (_, args) =>
         {
-            if (args.Key != Key.Enter || !send.IsEnabled) return;
+            if (args.Key != Key.Enter) return;
             args.Handled = true;
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) return;
+            if (!send.IsEnabled) return;
             await SendAsync(null);
         };
         var sendFile = Button("Datei senden …", async () =>
@@ -370,9 +456,61 @@ internal sealed class MsgWindow : Shell
             if (picker.ShowDialog(this) == true)
                 await WriteCommand(new { kind = "folder", path = picker.FolderName });
         });
-        chat.Children.Add(Row(send, sendFile, receiveFolder));
-        var folderState = Text("Dateien bis 16 MiB. Zum Empfangen wähle einen Ordner.", 12, true);
+        chat.Children.Add(Row(send, sendFile));
+        var folderState = Text("Eingehende Dateien fragen nach einem Speicherort.", 12, true);
         chat.Children.Add(folderState);
+
+        var downloadPanel = Section("Datei erhalten", "");
+        var downloadInfo = (TextBlock)downloadPanel.Children[1];
+        downloadPanel.Children.Add(Row(
+            Button("Speichern unter …", async () => await SaveDownload(false)),
+            Button("Ordner wählen …", async () => await SaveDownload(true)),
+            Button("Ablehnen", async () =>
+            {
+                if (downloadId is { } id) await WriteCommand(new { kind = "reject_download", id });
+            })));
+        var downloadCard = Card(downloadPanel);
+        downloadCard.Visibility = Visibility.Collapsed;
+        downloadCard.Margin = new Thickness(0, 8, 0, 8);
+        chat.Children.Add(downloadCard);
+
+        async Task SaveDownload(bool folder)
+        {
+            if (downloadId is not { } id || chatSession is not { } session) return;
+            if (folder)
+            {
+                var picker = new OpenFolderDialog { Title = "Ordner für diese und weitere Dateien wählen" };
+                if (picker.ShowDialog(this) == true && downloadId == id && ReferenceEquals(chatSession, session) && !session.IsCancellationRequested)
+                    await WriteCommand(new { kind = "download_folder", id, path = picker.FolderName });
+            }
+            else
+            {
+                var picker = new SaveFileDialog
+                {
+                    Title = "Erhaltene Datei speichern", FileName = downloadName,
+                    CheckPathExists = true, OverwritePrompt = false, AddExtension = false
+                };
+                if (picker.ShowDialog(this) == true && downloadId == id && ReferenceEquals(chatSession, session) && !session.IsCancellationRequested)
+                    await WriteCommand(new { kind = "save_download", id, path = picker.FileName });
+            }
+        }
+
+        async Task ShowDownload(CancellationTokenSource session, long id)
+        {
+            if (!ReferenceEquals(chatSession, session) || session.IsCancellationRequested || downloadId != id || downloadPrompt is not null)
+                return;
+            var shown = new MsgPrompt(this, "Datei erhalten",
+                $"{downloadName} · {downloadSize / 1024.0:N1} KiB\n\nWo möchtest du die Datei speichern?",
+                "Speichern unter …", "Ordner wählen …", "Ablehnen");
+            downloadPrompt = shown;
+            shown.Display();
+            var choice = await shown.Result;
+            if (ReferenceEquals(downloadPrompt, shown)) downloadPrompt = null;
+            if (!ReferenceEquals(chatSession, session) || session.IsCancellationRequested || downloadId != id) return;
+            if (choice == PromptChoice.First) await SaveDownload(false);
+            else if (choice == PromptChoice.Second) await SaveDownload(true);
+            else if (choice == PromptChoice.Third) await WriteCommand(new { kind = "reject_download", id });
+        }
 
         var availability = Text("", 13, true);
         availability.TextWrapping = TextWrapping.Wrap;
@@ -389,36 +527,95 @@ internal sealed class MsgWindow : Shell
         var statusPanel = new StackPanel();
         statusPanel.Children.Add(availability);
         statusPanel.Children.Add(Row(statusToggle));
-        chat.Children.Add(statusPanel);
+        var chatOptions = new StackPanel();
+        chatOptions.Children.Add(statusPanel);
+        chatOptions.Children.Add(Row(receiveFolder));
+        var optionsExpander = new Expander { Header = "Dateien & Privatsphäre", Content = chatOptions, Margin = new Thickness(2, 8, 0, 0), FontSize = 11 };
+        chat.Children.Add(optionsExpander);
 
-        async Task OpenChannel(object request, string peer)
+        startConversation = () =>
         {
+            if (chatSession is null) activeChat = OpenChannel();
+        };
+        stopConversation = async () =>
+        {
+            chatSession?.Cancel();
+            await activeChat;
+        };
+
+        async Task OpenChannel()
+        {
+            if (identityPath is not { } path || ActivePeer is not { } peer || SendAddress is not { } address || !ContactAccepted)
+                return;
+            RestoreConversation();
             using var session = new CancellationTokenSource();
             chatSession = session;
             channelPeer = peer;
-            SetLink("Chatkanal öffnet sich …", "Die andere Person öffnet den Chatkanal ebenfalls.");
+            connectionFailed = false;
+            using var cancellationDisplay = session.Token.Register(() =>
+            {
+                void Reset()
+                {
+                    if (!ReferenceEquals(chatSession, session)) return;
+                    connected = false;
+                    encryptionIndicator.Update(ChannelSecurity.Disconnected);
+                    SetLink("Verbindung wird beendet …", "Der Kanal ist nicht mehr zum Senden freigegeben.");
+                    refresh();
+                }
+                if (Dispatcher.CheckAccess()) Reset();
+                else Dispatcher.BeginInvoke(new Action(Reset));
+            });
+            SetLink("Verbindung wird aufgebaut …", "MSG verbindet euch nach der Zustimmung automatisch.");
             refresh();
-            string detail = "Öffnet den Chatkanal erneut, wenn ihr weiterschreiben möchtet.";
+            string detail = "Wähle den Kontakt erneut, um eine neue Verbindung anzufragen.";
             bool failed = false;
             try
             {
+                string local = direct ? Endpoint(localAddress) : LocalAddress;
+                var endpoint = direct ? null : await EnsureTorAsync(session.Token);
+                session.Token.ThrowIfCancellationRequested();
+                var request = new { action = "chat", path, peer, address, local, tor = !direct, socks_port = endpoint?.SocksPort };
                 var reply = await Engine.Chat(request, IdentityPassword(), session.Token, frame =>
                 {
+                    if (!ReferenceEquals(chatSession, session) || session.IsCancellationRequested) return;
                     switch (frame.GetProperty("event").GetString())
                     {
                         case "chat_waiting":
                         case "connecting":
-                            SetLink("Wartet auf die andere Person", "Öffnet den Chatkanal auf beiden Geräten.");
+                            SetLink("Verbindung wird aufgebaut …", "Warte einen Moment, bis die andere App bereit ist.");
                             break;
                         case "chat_connected":
                             connected = true;
-                            SetLink("Chatkanal offen", "Ende-zu-Ende verschlüsselt · Ihr könnt beide schreiben.", "Mint");
+                            SetLink("Verbunden", "Ende-zu-Ende verschlüsselt · Ihr könnt schreiben und Dateien senden.", "Mint");
+                            draft.Focus();
                             break;
                         case "chat_text":
                             AddBubble(frame.GetProperty("text").GetString()!, outgoing: false);
                             history.ScrollToEnd();
                             break;
+                        case "chat_download":
+                            downloadId = frame.GetProperty("id").GetInt64();
+                            downloadName = frame.GetProperty("name").GetString()!;
+                            downloadSize = frame.GetProperty("size").GetInt64();
+                            downloadInfo.Text = $"{downloadName} · {downloadSize / 1024.0:N1} KiB";
+                            long offeredId = downloadId.Value;
+                            Dispatcher.BeginInvoke(new Action(() => _ = ShowDownload(session, offeredId)));
+                            break;
+                        case "chat_download_closed":
+                        case "chat_download_expired":
+                            if (frame.GetProperty("id").GetInt64() != downloadId) break;
+                            downloadId = null;
+                            downloadPrompt?.Close();
+                            downloadPrompt = null;
+                            SetStatus("Datei abgelehnt.");
+                            break;
+                        case "chat_download_error":
+                            SetStatus(frame.GetProperty("message").GetString()!, true);
+                            break;
                         case "chat_file":
+                            downloadId = null;
+                            downloadPrompt?.Close();
+                            downloadPrompt = null;
                             if (frame.GetProperty("saved_file").GetString() is { } file)
                             {
                                 AddBubble($"Datei gespeichert · {file}", outgoing: false);
@@ -437,7 +634,7 @@ internal sealed class MsgWindow : Shell
                                     history.ScrollToEnd();
                                     SetStatus("Zugestellt.");
                                 }
-                                else SetStatus("Datei nicht gespeichert. Die andere Person kann den Empfangsordner prüfen.", true);
+                                else SetStatus("Die andere Person hat die Datei nicht gespeichert.", true);
                             }
                             pending = null;
                             break;
@@ -471,16 +668,20 @@ internal sealed class MsgWindow : Shell
                 or System.ComponentModel.Win32Exception or JsonException or InvalidOperationException)
             {
                 failed = true;
-                detail = "Die Verbindung wurde unterbrochen. Öffnet den Chatkanal erneut.";
+                detail = "Die Verbindung wurde unterbrochen. Wähle den Kontakt erneut, um eine neue Verbindung anzufragen.";
             }
             finally
             {
                 session.Cancel();
+                downloadId = null;
+                downloadPrompt?.Close();
+                downloadPrompt = null;
                 if (pending is not null)
                     SetStatus("Die letzte Übertragung wurde nicht bestätigt. Kläre das vor einem erneuten Versuch.", true);
                 channelInput = null;
                 channelPeer = null;
                 connected = localStatus = peerStatus = folderReady = false;
+                connectionFailed = failed;
                 pending = null;
                 chatSession = null;
                 if (string.Equals(ActivePeer, peer, StringComparison.OrdinalIgnoreCase))
@@ -539,7 +740,7 @@ internal sealed class MsgWindow : Shell
         }
 
         var clear = Button("Verlauf leeren", ClearTimeline);
-        chat.Children.Add(Row(clear));
+        chatOptions.Children.Add(Row(clear));
 
         var goToChat = Button("Zum Chat", () => showChat(), true);
         contact.Children.Add(Row(goToChat));
@@ -550,11 +751,126 @@ internal sealed class MsgWindow : Shell
         contactMethods.Children.Add(Card(requestOptions));
         contactPage = Columns(Card(contactBook), contactMethods);
         var columns = Card(chat);
-        page.Children.Add(columns);
+        columns.CornerRadius = new CornerRadius(24);
+        columns.Margin = new Thickness(0);
+        columns.Padding = new Thickness(22, 18, 22, 16);
+        columns.Background = new SolidColorBrush(Color.FromRgb(24, 38, 48));
+        // Only history scrolls; the contact header and composer stay in view.
+        var historyFrame = (Border)history.Parent;
+        chat.Children.Clear();
+        link.Children.Clear();
+        var chatHeader = new StackPanel();
+        var chatFooter = new StackPanel();
+        var avatar = MessengerFrame.Avatar("?", 44);
+        avatar.Margin = new Thickness(0, 0, 12, 0);
+        var contactHeading = new DockPanel();
+        var headingActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        badges.VerticalAlignment = VerticalAlignment.Center;
+        badges.Margin = new Thickness(0, 0, 8, 0);
+        headingActions.Children.Add(badges);
+        headingActions.Children.Add(chatActions);
+        DockPanel.SetDock(headingActions, Dock.Right);
+        contactHeading.Children.Add(headingActions);
+        contactHeading.Children.Add(avatar);
+        var contactTitle = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        contactTitle.Children.Add(selectedContact);
+        linkState.FontSize = 12;
+        linkState.Margin = new Thickness(0, 4, 0, 0);
+        var statusLine = new WrapPanel();
+        statusLine.Children.Add(linkState);
+        statusLine.Children.Add(encryptionIndicator);
+        contactTitle.Children.Add(statusLine);
+        contactHeading.Children.Add(contactTitle);
+        chatHeader.Children.Add(contactHeading);
+        linkDetail.FontSize = 12;
+        linkDetail.Margin = new Thickness(56, 4, 0, 6);
+        chatHeader.Children.Add(linkDetail);
+        chatHeader.Children.Add(chatSavePanel);
+        var channelRow = (FrameworkElement)channelButton.Parent;
+        chatHeader.Children.Add(channelRow);
+        historyFrame.BorderThickness = new Thickness(0);
+        historyFrame.Background = Brushes.Transparent;
+        historyFrame.Padding = new Thickness(0, 16, 0, 14);
+        historyFrame.Margin = new Thickness(0);
+        history.SizeChanged += (_, _) =>
+        {
+            bubbleWidth = Math.Max(160, Math.Min(560, history.ActualWidth * .82));
+            foreach (var bubble in bubbles) bubble.MaxWidth = bubbleWidth;
+        };
+        ((Panel)send.Parent).Children.Clear();
+        send.MinWidth = 82;
+        send.Height = 42;
+        sendFile.Content = "+";
+        sendFile.ToolTip = "Datei senden …";
+        sendFile.FontSize = 24;
+        sendFile.Width = 42;
+        sendFile.Height = 42;
+        sendFile.Padding = new Thickness(0);
+        sendFile.Background = Brushes.Transparent;
+        sendFile.BorderThickness = new Thickness(0);
+        AutomationProperties.SetName(sendFile, "Datei senden");
+        var composerRow = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(send, Dock.Right);
+        send.Margin = new Thickness(8, 0, 0, 0);
+        composerRow.Children.Add(send);
+        composerRow.Children.Add(sendFile);
+        draft.Background = Brushes.Transparent;
+        draft.BorderThickness = new Thickness(0);
+        draft.FontSize = 14;
+        draft.Padding = new Thickness(10, 10, 8, 8);
+        draft.ToolTip = "Nachricht schreiben · Enter zum Senden";
+        var draftArea = new Grid();
+        draftArea.Children.Add(draft);
+        var draftHint = Text("Nachricht schreiben …", 14, true);
+        draftHint.VerticalAlignment = VerticalAlignment.Center;
+        draftHint.Margin = new Thickness(11, 0, 0, 0);
+        draftHint.IsHitTestVisible = false;
+        draftArea.Children.Add(draftHint);
+        composerRow.Children.Add(draftArea);
+        var composer = new Border
+        {
+            Background = Brush("Field"), BorderBrush = Brush("Line"), BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(18), Padding = new Thickness(6), Child = composerRow
+        };
+        chatFooter.Children.Add(downloadCard);
+        chatFooter.Children.Add(composer);
+        chatFooter.Children.Add(optionsExpander);
+        chatOptions.Children.Add(folderState);
+        var chatLayout = new Grid();
+        chatLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        chatLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 72 });
+        chatLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        history.Height = double.NaN;
+        Grid.SetRow(historyFrame, 1);
+        Grid.SetRow(chatFooter, 2);
+        chatLayout.Children.Add(chatHeader);
+        chatLayout.Children.Add(historyFrame);
+        chatLayout.Children.Add(chatFooter);
+        columns.Child = chatLayout;
+        columns.MinHeight = 440;
+        var chatWorkspace = new Grid();
+        var sidebarColumn = new ColumnDefinition { Width = new GridLength(250) };
+        chatWorkspace.ColumnDefinitions.Add(sidebarColumn);
+        chatWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        sidebar = new ConversationSidebar(async key =>
+        {
+            if (knownContacts.TryGetValue(key, out var saved)) await OpenSavedContact(saved);
+            else if (string.Equals(key, ActivePeer, StringComparison.OrdinalIgnoreCase)) showChat();
+        }, () => showRequestOptions(), () => shareMyAddress());
+        Grid.SetColumn(columns, 1);
+        chatWorkspace.Children.Add(sidebar);
+        chatWorkspace.Children.Add(columns);
+        chatWorkspace.MinHeight = 440;
+        chatWorkspace.SetBinding(HeightProperty, new System.Windows.Data.Binding("ViewportHeight")
+        {
+            RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1)
+        });
+        chatWorkspace.SizeChanged += (_, size) => sidebarColumn.Width = new GridLength(size.NewSize.Width < 850 ? 205 : 250);
+        page.Children.Add(chatWorkspace);
         refresh = () =>
         {
             onboarding.Visibility = identityPath is null ? Visibility.Visible : Visibility.Collapsed;
-            columns.Visibility = identityPath is null ? Visibility.Collapsed : Visibility.Visible;
+            chatWorkspace.Visibility = identityPath is null ? Visibility.Collapsed : Visibility.Visible;
             bool hasPeer = ActivePeer is { Length: 64 } key && key.All(char.IsAsciiHexDigit);
             bool canMessage = identityPath is not null && hasPeer && ContactAccepted;
             bool compared = canMessage && verified.IsChecked == true;
@@ -565,8 +881,9 @@ internal sealed class MsgWindow : Shell
                 obsolete.Cancel();
             bool ready = connected && channelInput is not null && chatSession is { IsCancellationRequested: false };
             goToChat.IsEnabled = canMessage;
-            channelButton.Content = chatSession is null ? "Chatkanal öffnen"
-                : connected ? "Chatkanal schließen" : "Öffnen abbrechen";
+            channelButton.Visibility = ready || !canMessage ? Visibility.Collapsed : Visibility.Visible;
+            channelRow.Visibility = channelButton.Visibility;
+            channelButton.Content = chatSession is null ? "Chat starten" : "Verbindung abbrechen";
             channelButton.IsEnabled = chatSession is { IsCancellationRequested: false }
                 || (chatSession is null && canMessage && routeAvailable);
             statusPanel.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
@@ -577,8 +894,10 @@ internal sealed class MsgWindow : Shell
                 : "Wollt ihr den Online-Status teilen? Die Anzeige erscheint erst, wenn ihr beide zustimmt.";
             availability.Foreground = Brush(localStatus && peerStatus ? "Mint" : "Muted");
             folderState.Text = folderReady ? "Empfangsordner bereit · Dateien bis 16 MiB."
-                : "Dateien bis 16 MiB. Zum Empfangen wähle einen Ordner.";
+                : "Eingehende Dateien fragen nach einem Speicherort · bis 16 MiB.";
             receiveFolder.IsEnabled = ready && !writing;
+            downloadCard.Visibility = ready && downloadId is not null ? Visibility.Visible : Visibility.Collapsed;
+            downloadCard.IsEnabled = ready && !writing;
             bool encrypted = RequiresCodePassword(code.Text.TrimStart());
             using var secret = codePassword.SecurePassword;
             import.IsEnabled = code.Text.Trim().Length > 0 && (!encrypted || secret.Length > 0);
@@ -587,17 +906,31 @@ internal sealed class MsgWindow : Shell
             verified.IsEnabled = hasPeer && incomingTicket is null;
             joinRow.Visibility = incomingTicket is not null ? Visibility.Visible : Visibility.Collapsed;
             joinInvitation.IsEnabled = !direct && !requireTwoCodes && routeAvailable;
-            saveContact.IsEnabled = compared && !string.IsNullOrWhiteSpace(contactName.Text);
+            saveContact.IsEnabled = canMessage && !string.IsNullOrWhiteSpace(contactName.Text);
+            saveChatContact.Visibility = canMessage && !contactSaved ? Visibility.Visible : Visibility.Collapsed;
+            saveChatContact.IsEnabled = canMessage && !contactSaved;
+            saveChatContact.Content = contactSaved ? "Kontakt gespeichert" : "Kontakt übernehmen";
+            confirmChatContact.IsEnabled = canMessage && !string.IsNullOrWhiteSpace(chatContactName.Text);
+            endChat.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
             saveHint.Visibility = saveContact.IsEnabled ? Visibility.Collapsed : Visibility.Visible;
             saveOptions.Visibility = canMessage ? Visibility.Visible : Visibility.Collapsed;
             openSaved.IsEnabled = removeSaved.IsEnabled = savedContacts.SelectedItem is SavedContact;
             send.IsEnabled = ready && !writing && pending is null && !string.IsNullOrWhiteSpace(draft.Text);
             sendFile.IsEnabled = ready && !writing && pending is null;
-            chooseContact.Content = canMessage ? "Kontakt wechseln" : "Kontakt auswählen";
             selectedContact.Text = !canMessage ? "Kein Kontakt ausgewählt"
                 : (UsingImportedContact ? peerName : "Manuell gewählter Kontakt") ?? "Kontakt aus Einladung";
+            ((TextBlock)avatar.Child).Text = !canMessage ? "K" : System.Globalization.StringInfo.GetNextTextElement(selectedContact.Text).ToUpperInvariant();
+            linkDetail.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+            encryptionIndicator.Update(ready ? ChannelSecurity.Encrypted
+                : chatSession is { IsCancellationRequested: false } ? ChannelSecurity.Connecting
+                : connectionFailed ? ChannelSecurity.Failed : ChannelSecurity.Disconnected);
+            linkState.ToolTip = ready ? "Ende-zu-Ende verschlüsselt · Authentifizierte Verbindung" : linkDetail.Text;
+            composer.Visibility = canMessage ? Visibility.Visible : Visibility.Collapsed;
+            optionsExpander.Visibility = canMessage ? Visibility.Visible : Visibility.Collapsed;
             clear.IsEnabled = bubbles.Count > 0;
             empty.Visibility = bubbles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            empty.Text = canMessage ? "Noch keine Nachrichten.\nHier beginnt euer Gespräch." : "Öffne links einen Chat.\nOder füge einen neuen Kontakt hinzu.";
+            history.VerticalContentAlignment = bubbles.Count == 0 ? VerticalAlignment.Center : VerticalAlignment.Top;
             keyDisplay.Text = hasPeer ? ActivePeer ?? "" : "";
             ownKeyDisplay.Text = publicKey ?? "";
             fingerprint.Visibility = hasPeer ? Visibility.Visible : Visibility.Collapsed;
@@ -608,20 +941,26 @@ internal sealed class MsgWindow : Shell
                 : "Für den Chatkanal brauchst du einen aktuellen Kontaktcode mit Adresse.";
             transportState.Text = direct ? "DIREKTE IP" : "TOR";
             refreshContactRequests();
+            RefreshConversationList();
         };
         clearContact = () =>
         {
             chatSession?.Cancel();
+            connectionFailed = false;
+            encryptionIndicator.Update(ChannelSecurity.Disconnected);
             peerName = null;
+            contactSaved = false;
+            chatSavePanel.Visibility = Visibility.Collapsed;
+            chatContactName.Clear();
+            chatContactName.ClearUndo();
             ClearTicket(ref incomingTicket);
             encryptedInvitation = false;
-            savedContacts.ItemsSource = null;
-            loadedForIdentity = null;
             contactName.Clear();
+            contactName.ClearUndo();
             code.Clear();
+            code.ClearUndo();
             codePassword.Clear();
-            draft.Clear();
-            ClearTimeline();
+            LeaveConversation();
         };
         code.TextChanged += (_, _) =>
         {
@@ -635,13 +974,20 @@ internal sealed class MsgWindow : Shell
         codePassword.PasswordChanged += (_, _) => refresh();
         savedContacts.SelectionChanged += (_, _) => refresh();
         contactName.TextChanged += (_, _) => refresh();
+        chatContactName.TextChanged += (_, _) => refresh();
         verified.Checked += (_, _) =>
         {
             if (chatSession is null) SetLink("Schlüssel abgeglichen", "Öffnet den Chatkanal auf beiden Geräten.");
             refresh();
         };
         verified.Unchecked += (_, _) => refresh();
-        draft.TextChanged += (_, _) => refresh();
+        draft.TextChanged += (_, _) =>
+        {
+            draftHint.Visibility = draft.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (!restoringConversation && displayedPeer is { } key && identityPath is not null)
+                conversations.Open(key).Draft = draft.Text;
+            refresh();
+        };
         return page;
     }
 
@@ -753,6 +1099,7 @@ internal sealed class MsgWindow : Shell
         }, true)));
         var lockRow = Row(Button("MSG sperren", () =>
         {
+            identitySession++;
             chatSession?.Cancel();
             contactRequestSession?.Cancel();
             identitySecret?.Dispose();
@@ -768,6 +1115,7 @@ internal sealed class MsgWindow : Shell
             codePassword.Clear();
             clearContact();
             clearInvitation();
+            ClearSessionConversations();
             ResetLink();
             profileName.Text = "MSG ist gesperrt";
             openOption.IsExpanded = true;
@@ -865,7 +1213,8 @@ internal sealed class MsgWindow : Shell
                 contactOpened = true;
                 encryptedInvitation = true;
                 verified.IsChecked = false;
-                SetLink($"{accepted.Label} angenommen", "Öffnet jetzt den Chatkanal auf beiden Geräten. Ihr könnt den Schlüssel persönlich abgleichen.", "Mint");
+                SetLink($"{accepted.Label} angenommen", "Der Chat öffnet sich automatisch.", "Mint");
+                startConversation();
                 showChat();
                 refresh();
             }, canCancel: true);
@@ -921,6 +1270,7 @@ internal sealed class MsgWindow : Shell
 
         void UseIdentity(string path, Reply reply, SecureString unlocked)
         {
+            identitySession++;
             if (identityPath != path || publicKey != reply.Text)
             {
                 contactRequestSession?.Cancel();
@@ -931,6 +1281,7 @@ internal sealed class MsgWindow : Shell
                 verified.IsChecked = false;
                 codePassword.Clear();
                 clearContact();
+                ClearSessionConversations();
             }
             identityPath = path;
             identitySecret?.Dispose();
@@ -951,150 +1302,228 @@ internal sealed class MsgWindow : Shell
 
     private FrameworkElement TorContactRequests()
     {
-        var panel = Section("Kontakt per Tor-Adresse",
-            "Sende eine Anfrage an eine .onion-Adresse. Dabei gibst du auch deine eigene Tor-Adresse weiter.");
+        var panel = Section("Kontakt hinzufügen",
+            "Gib die Tor-Adresse ein. Sobald die andere Person annimmt, öffnet sich euer Chat.");
         var addressInput = Field(panel, "Tor-Adresse des Kontakts", new TextBox { MaxLength = 72 });
-        var send = Button("Anfrage senden", async () =>
-        {
-            if (identityPath is not { } path || direct || requireTwoCodes || chatSession is not null) return;
-            string address = addressInput.Text.Trim().ToLowerInvariant();
-            if (address.EndsWith(".onion", StringComparison.Ordinal)) address += $":{TorRuntime.OnionPort}";
-            await Run("Kontaktanfrage wird vorbereitet …", async token =>
-            {
-                if (!IsOnionEndpoint(address))
-                    throw new ArgumentException("Gib eine gültige .onion-Adresse ein.");
-                var endpoint = await EnsureTorAsync(token);
-                return await Engine.Call(new { action = "send_contact_request", path, address,
-                    own_address = endpoint.OnionAddress, socks_port = endpoint.SocksPort }, IdentityPassword(),
-                    cancellation: token, onProgress: status =>
-                    {
-                        if (status == "request_waiting") SetStatus("Wartet auf die Entscheidung der anderen Person …");
-                    });
-            }, SelectContact, canCancel: true);
-        });
+        var send = Button("Verbindung anfragen", async () =>
+            await requestChat(addressInput.Text, null), true);
         panel.Children.Add(Row(send));
-        var listeningState = Text("Eingehende Anfragen sind aus.", 13);
+        panel.Children.Add(Text("Eine Anfrage teilt deinen öffentlichen Schlüssel und deine Tor-Adresse mit der Gegenstelle.", 12, true));
+        var listeningState = Text("Du bist für neue Anfragen nicht erreichbar.", 13);
         panel.Children.Add(listeningState);
         var requestInfo = Text("", 13);
         requestInfo.TextWrapping = TextWrapping.Wrap;
         panel.Children.Add(requestInfo);
         Func<object, Task>? submit = null;
         long? pending = null;
+        string? pendingKey = null;
         bool deciding = false;
-        var allow = new Button { Content = "Anfragen erlauben" };
+        long requestGeneration = 0;
+        MsgPrompt? prompt = null;
+        var allow = new Button { Content = "Für Anfragen erreichbar werden" };
         var accept = new Button { Content = "Annehmen" };
         var reject = new Button { Content = "Ablehnen" };
-        var decisions = Row(accept, reject);
+        var block = new Button { Content = "Blockieren" };
+        var decisions = Row(accept, reject, block);
         panel.Children.Add(decisions);
         panel.Children.Add(Row(allow));
-        panel.Children.Add(Text("Du entscheidest bei jeder Anfrage. Sperren schaltet den Empfang wieder aus.", 12, true));
-        var copyAddress = Button("Eigene Tor-Adresse kopieren", async () =>
-        {
-            await Run("Eigene Tor-Adresse wird geladen …", async token =>
-            {
-                var endpoint = await EnsureTorAsync(token);
-                return new Reply(true, "Eigene Tor-Adresse geladen.", endpoint.OnionAddress, null, null);
-            }, reply =>
-            {
-                if (reply.Text is { } endpoint) CopyText(endpoint.Split(':')[0], "Eigene Tor-Adresse kopiert.");
-            }, canCancel: true);
-        });
-        panel.Children.Add(Row(copyAddress));
-        var section = new Expander { Header = "Kontakt per Tor-Adresse", Content = panel, Margin = new Thickness(0, 12, 0, 0) };
+        panel.Children.Add(Text("Jede neue Anfrage braucht deine Zustimmung. Sperren schaltet die Erreichbarkeit aus.", 12, true));
+        var section = new Expander { Header = "Per Tor-Adresse verbinden", Content = panel, Margin = new Thickness(0, 12, 0, 0) };
 
         void Update()
         {
             section.Visibility = identityPath is not null && !direct && !requireTwoCodes ? Visibility.Visible : Visibility.Collapsed;
-            send.IsEnabled = chatSession is null && !string.IsNullOrWhiteSpace(addressInput.Text);
-            allow.Content = contactRequestSession is null ? "Anfragen erlauben" : "Anfragen ausschalten";
+            send.IsEnabled = !string.IsNullOrWhiteSpace(addressInput.Text);
+            allow.Content = contactRequestSession is null ? "Für Anfragen erreichbar werden" : "Keine neuen Anfragen";
             allow.IsEnabled = contactRequestSession is not { IsCancellationRequested: true };
             bool open = pending.HasValue && contactRequestSession is { IsCancellationRequested: false };
             requestInfo.Visibility = decisions.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-            accept.IsEnabled = open && !deciding && submit is not null && chatSession is null;
-            reject.IsEnabled = open && !deciding && submit is not null;
-            accept.ToolTip = chatSession is null ? null : "Schließe zuerst den aktiven Chatkanal.";
+            accept.IsEnabled = reject.IsEnabled = block.IsEnabled = open && !deciding && submit is not null;
         }
 
-        async Task Decide(bool accepted)
+        async Task Decide(bool accepted, bool blocked = false)
         {
             if (pending is not { } id || submit is not { } input || deciding) return;
             deciding = true;
             Update();
-            try { await input(new { id, accept = accepted }); }
+            try
+            {
+                if (blocked && string.Equals(pendingKey, ActivePeer, StringComparison.OrdinalIgnoreCase))
+                    await stopConversation();
+                await input(new { id, accept = accepted, block = blocked });
+                SetStatus(blocked ? "Kontakt wird blockiert …" : accepted ? "Anfrage angenommen. Chat wird geöffnet …" : "Anfrage abgelehnt.");
+            }
             catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
             {
                 contactRequestSession?.Cancel();
             }
         }
 
+        async Task ShowRequest(long id, string address, long generation)
+        {
+            if (pending != id || generation != requestGeneration || deciding || prompt is not null) return;
+            var shown = new MsgPrompt(this, "Neue Kontaktanfrage",
+                $"Jemand möchte mit dir chatten.\n\n{address}\n\nMit Annehmen wird der Chat geöffnet."
+                + (chatSession is not null ? " Dabei wechselst du von deinem aktuellen Chat zu diesem Kontakt." : ""),
+                "Annehmen", "Ablehnen", "Blockieren");
+            prompt = shown;
+            shown.Display();
+            var choice = await shown.Result;
+            if (ReferenceEquals(prompt, shown)) prompt = null;
+            if (pending != id || generation != requestGeneration || deciding) return;
+            await Decide(choice == PromptChoice.First, choice == PromptChoice.Third);
+        }
+
         async Task Listen(string path)
         {
             using var session = new CancellationTokenSource();
             contactRequestSession = session;
-            listeningState.Text = "Kontaktanfragen werden aktiviert …";
+            contactRequestsReady = false;
+            listeningState.Text = "Erreichbarkeit wird vorbereitet …";
             Update();
             try
             {
-                var reply = await Engine.Chat(new { action = "listen_contact_requests", path }, IdentityPassword(),
-                    session.Token, frame =>
-                    {
-                        switch (frame.GetProperty("event").GetString())
+                while (!session.IsCancellationRequested && identityPath == path && !direct && !requireTwoCodes)
+                {
+                    long generation = ++requestGeneration;
+                    var reply = await Engine.Chat(new { action = "listen_contact_requests", path }, IdentityPassword(),
+                        session.Token, frame =>
                         {
-                            case "request_listening":
-                                listeningState.Text = "Eingehende Anfragen sind an.";
-                                SetStatus("Kontaktanfragen sind aktiv.");
-                                break;
-                            case "incoming_request":
-                                pending = frame.GetProperty("id").GetInt64();
-                                requestInfo.Text = $"Neue Anfrage von {frame.GetProperty("address").GetString()}\nMöchtest du diesen Kontakt annehmen? Die Anfrage läuft nach 45 Sekunden ab.";
-                                SetStatus("Neue Kontaktanfrage · Öffne Kontakte und dann „Kontakt per Tor-Adresse“.");
-                                section.IsExpanded = true;
-                                break;
-                            case "request_cleared":
-                                if (deciding) SetStatus("Kontaktanfrage beantwortet.");
-                                else SetStatus("Kontaktanfrage abgelaufen.");
-                                pending = null;
-                                deciding = false;
-                                break;
-                        }
-                        Update();
-                    }, input => { submit = input; Update(); });
-                if (reply.Ok && reply.Text is not null) SelectContact(reply);
-                else if (!reply.Ok) SetStatus(reply.Message, true);
+                            switch (frame.GetProperty("event").GetString())
+                            {
+                                case "request_listening":
+                                    contactRequestsReady = true;
+                                    listeningState.Text = "Du bist für neue Anfragen erreichbar.";
+                                    SetStatus("Bereit für Kontaktanfragen.");
+                                    break;
+                                case "incoming_request":
+                                    pending = frame.GetProperty("id").GetInt64();
+                                    pendingKey = frame.GetProperty("key").GetString();
+                                    string address = frame.GetProperty("address").GetString()!;
+                                    requestInfo.Text = $"Neue Anfrage von {address}";
+                                    SetStatus("Neue Kontaktanfrage.");
+                                    long id = pending.Value;
+                                    Dispatcher.BeginInvoke(new Action(() => _ = ShowRequest(id, address, generation)));
+                                    break;
+                                case "request_block_error":
+                                    SetStatus("Die Anfrage wurde abgelehnt. Die Blockierung konnte nicht gespeichert werden.", true);
+                                    break;
+                                case "request_blocked":
+                                    SetStatus("Kontakt blockiert. Weitere Anfragen dieses Kontakts werden abgelehnt.");
+                                    break;
+                                case "request_cleared":
+                                    pending = null;
+                                    pendingKey = null;
+                                    deciding = false;
+                                    prompt?.Close();
+                                    prompt = null;
+                                    break;
+                            }
+                            Update();
+                            RefreshConversationList();
+                        }, input => { submit = input; Update(); });
+                    submit = null;
+                    if (reply.Ok && reply.Text is not null) await SelectContact(reply);
+                    else
+                    {
+                        if (!reply.Ok) SetStatus(reply.Message, true);
+                        break;
+                    }
+                }
             }
             catch (OperationCanceledException) when (session.IsCancellationRequested) { }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
                 or InvalidOperationException or System.ComponentModel.Win32Exception or JsonException)
             {
-                SetStatus("Kontaktanfragen wurden unterbrochen.", true);
+                SetStatus("Kontaktanfragen wurden unterbrochen. Aktiviere die Erreichbarkeit erneut.", true);
             }
             finally
             {
-                contactRequestSession = null;
                 pending = null;
+                pendingKey = null;
+                prompt?.Close();
+                prompt = null;
+                contactRequestSession = null;
+                contactRequestsReady = false;
                 submit = null;
                 deciding = false;
                 requestInfo.Text = "";
-                listeningState.Text = "Eingehende Anfragen sind aus.";
+                listeningState.Text = "Du bist für neue Anfragen nicht erreichbar.";
                 Update();
+                refresh();
             }
         }
 
-        void SelectContact(Reply reply)
+        async Task SelectContact(Reply reply)
         {
-            clearContact();
-            peerKey = reply.Text;
-            peerAddress = reply.Address;
-            peerName = "Kontakt per Tor-Adresse";
-            contactOpened = true;
-            encryptedInvitation = true;
-            verified.IsChecked = false;
-            SetLink("Kontaktanfrage angenommen", "Öffnet den Chatkanal auf beiden Geräten. Ihr könnt eure Schlüssel unter Kontakte abgleichen.", "Mint");
-            SetStatus(reply.Message);
-            showChat();
+            string? path = identityPath;
+            long currentSession = identitySession;
+            await contactSelection.WaitAsync();
+            try
+            {
+                await stopConversation();
+                if (path is null || identityPath != path || identitySecret is null || currentSession != identitySession) return;
+                clearContact();
+                peerKey = reply.Text;
+                peerAddress = reply.Address;
+                knownContacts.TryGetValue(reply.Text!, out var saved);
+                peerName = saved?.Name ?? "Neuer Kontakt";
+                contactSaved = saved is not null;
+                contactOpened = true;
+                encryptedInvitation = true;
+                verified.IsChecked = saved?.Verified == true;
+                RestoreConversation();
+                SetStatus("Anfrage angenommen. Der Chat öffnet sich …");
+                showChat();
+                refresh();
+                startConversation();
+            }
+            finally { contactSelection.Release(); }
+        }
+
+        async Task EnableRequests(bool copyAddress)
+        {
+            if (identityPath is not { } path || direct || requireTwoCodes) return;
+            string? address = null;
+            bool ready = await Run("Tor wird vorbereitet …", async token =>
+            {
+                address = (await EnsureTorAsync(token)).OnionAddress;
+                return new Reply(true, "Erreichbarkeit wird aktiviert.", null, null, null);
+            }, canCancel: true);
+            if (!ready || identityPath != path) return;
+            if (contactRequestSession is null) _ = Listen(path);
+            if (copyAddress && address is not null)
+                CopyText(address.Split(':')[0], "Adresse kopiert. Du bist für Anfragen erreichbar.");
             refresh();
         }
 
+        requestChat = async (input, expectedKey) =>
+        {
+            if (identityPath is not { } path || direct || requireTwoCodes) return;
+            long currentSession = identitySession;
+            string address = input.Trim().ToLowerInvariant();
+            if (address.EndsWith(".onion", StringComparison.Ordinal)) address += $":{TorRuntime.OnionPort}";
+            Reply? acceptedReply = null;
+            await Run("Verbindung wird angefragt …", async token =>
+            {
+                if (!IsOnionEndpoint(address)) throw new ArgumentException("Gib eine gültige .onion-Adresse ein.");
+                var endpoint = await EnsureTorAsync(token);
+                return await Engine.Call(new { action = "send_contact_request", path, address,
+                    own_address = endpoint.OnionAddress, socks_port = endpoint.SocksPort }, IdentityPassword(),
+                    cancellation: token, onProgress: status =>
+                    {
+                        if (status == "request_waiting") SetStatus("Die andere Person entscheidet über deine Anfrage …");
+                    });
+            }, reply => acceptedReply = reply, canCancel: true);
+            if (acceptedReply is null || identityPath != path || currentSession != identitySession) return;
+            if (expectedKey is not null && !string.Equals(expectedKey, acceptedReply.Text, StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Der Schlüssel passt nicht zum gespeicherten Kontakt. Gleiche ihn mit der Person ab.", true);
+                return;
+            }
+            await SelectContact(acceptedReply);
+        };
+        shareMyAddress = () => _ = EnableRequests(copyAddress: true);
         allow.Click += async (_, _) =>
         {
             if (contactRequestSession is { } active)
@@ -1103,15 +1532,11 @@ internal sealed class MsgWindow : Shell
                 Update();
                 return;
             }
-            if (identityPath is not { } path || direct || requireTwoCodes) return;
-            await Run("Tor wird vorbereitet …", async token =>
-            {
-                await EnsureTorAsync(token);
-                return new Reply(true, "Kontaktanfragen werden aktiviert.", null, null, null);
-            }, reply => _ = Listen(path), canCancel: true);
+            await EnableRequests(copyAddress: false);
         };
         accept.Click += async (_, _) => await Decide(true);
         reject.Click += async (_, _) => await Decide(false);
+        block.Click += async (_, _) => await Decide(false, blocked: true);
         addressInput.TextChanged += (_, _) => Update();
         refreshContactRequests = Update;
         showRequestOptions = () =>
@@ -1119,15 +1544,51 @@ internal sealed class MsgWindow : Shell
             showContacts();
             section.IsExpanded = true;
             section.BringIntoView();
+            addressInput.Focus();
         };
         Update();
         return section;
+    }
+
+    private FrameworkElement BlockedContactsView()
+    {
+        var panel = Section("Blockierte Kontakte", "Blockierte Geräteschlüssel können dir keine neuen Tor-Anfragen stellen.");
+        var list = new ListBox { DisplayMemberPath = "Value", MinHeight = 70, MaxHeight = 180 };
+        panel.Children.Add(list);
+        var remove = Button("Blockierung aufheben", async () =>
+        {
+            if (list.SelectedItem is KeyValuePair<string, string> item) await Load(item.Key);
+        });
+        panel.Children.Add(Row(Button("Aktualisieren", async () => await Load()), remove));
+        remove.IsEnabled = false;
+        list.SelectionChanged += (_, _) =>
+        {
+            remove.IsEnabled = list.SelectedItem is KeyValuePair<string, string>;
+            list.ToolTip = list.SelectedItem is KeyValuePair<string, string> item ? item.Key : null;
+        };
+        var section = new Expander { Header = "Blockierte Kontakte", Content = panel, Margin = new Thickness(0, 12, 0, 0) };
+        section.Expanded += async (_, _) => await Load();
+        return section;
+
+        async Task Load(string? removeKey = null)
+        {
+            if (identityPath is not { } path) return;
+            await Run("Blockierte Kontakte werden geladen …", token =>
+                Engine.Call(new { action = "blocked_contacts", path, remove = removeKey },
+                    IdentityPassword(), cancellation: token), reply =>
+                {
+                    var keys = JsonSerializer.Deserialize<string[]>(reply.Text ?? "[]") ?? [];
+                    list.ItemsSource = keys.Select(key => new KeyValuePair<string, string>(key,
+                        $"Kontakt · {key[..12].ToUpperInvariant()}")).ToArray();
+                });
+        }
     }
 
     private FrameworkElement SettingsView()
     {
         var preferences = Section("Kontakte & Freigaben", "Lege fest, wie dich neue Kontakte erreichen dürfen.");
         preferences.Children.Add(invitationSettings);
+        preferences.Children.Add(BlockedContactsView());
         preferences.Children.Add(Row(Button("Kontaktanfragen verwalten", () => showRequestOptions())));
         preferences.Children.Add(Text("Anfragen per Tor-Adresse erlaubst du für die aktuelle Sitzung. Sperren beendet die Freigabe. Online-Status teilt ihr im Chat nur mit beidseitiger Zustimmung.", 12, true));
         var tor = Section("Tor · Automatisch", "MSG startet das integrierte Tor bei Bedarf. Deine Onion-Adresse bleibt bei einem Neustart erhalten.");
@@ -1171,8 +1632,7 @@ internal sealed class MsgWindow : Shell
         {
             verified.IsChecked = false;
             ResetLink();
-            draft.Clear();
-            ClearTimeline();
+            LeaveConversation();
             refresh();
         };
         manualAddress.TextChanged += (_, _) => refresh();
@@ -1284,7 +1744,7 @@ internal sealed class MsgWindow : Shell
     }
 
     private void ResetLink() =>
-        SetLink("Kein offener Chatkanal", "Wählt euren Kontakt und öffnet den Chatkanal auf beiden Geräten.");
+        SetLink("Nicht verbunden", "Wähle einen Kontakt aus oder teile deine Adresse für eine Anfrage.");
 
     private void ShowLinkProgress(string status)
     {
@@ -1305,21 +1765,35 @@ internal sealed class MsgWindow : Shell
 
     private void AddBubble(string message, bool outgoing)
     {
+        if (ActivePeer is not { } key || identityPath is null) return;
+        if (!string.Equals(displayedPeer, key, StringComparison.OrdinalIgnoreCase)) RestoreConversation();
+        RenderBubble(conversations.Add(key, message, outgoing));
+        refresh();
+    }
+
+    private void RenderBubble(SessionConversations.Message message)
+    {
+        bool outgoing = message.Outgoing;
         var body = new StackPanel();
-        var label = Text(outgoing ? "Du · zugestellt" : "Kontakt · empfangen", 11, true);
-        label.Margin = new Thickness(0, 0, 0, 3);
-        body.Children.Add(label);
+        var label = Text($"{message.Time:HH:mm}{(outgoing ? "  ✓" : "")}", 10, true);
+        label.ToolTip = outgoing ? "Zugestellt" : "Empfangen";
+        label.Margin = new Thickness(0, 5, 0, 0);
+        label.HorizontalAlignment = HorizontalAlignment.Right;
         var text = new TextBox
         {
-            Text = message, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 0,
+            Text = message.Text, IsReadOnly = true, IsUndoEnabled = false, TextWrapping = TextWrapping.Wrap, MinHeight = 0,
             Padding = new Thickness(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0)
         };
+        text.FontSize = 14;
         body.Children.Add(text);
+        body.Children.Add(label);
         var bubble = new Border
         {
-            Child = body, CornerRadius = new CornerRadius(8), Padding = new Thickness(9),
-            Background = Brush(outgoing ? "Line" : "Card"),
-            Margin = outgoing ? new Thickness(24, 3, 0, 3) : new Thickness(0, 3, 24, 3)
+            Child = body, CornerRadius = outgoing ? new CornerRadius(16, 16, 4, 16) : new CornerRadius(16, 16, 16, 4),
+            Padding = new Thickness(14, 10, 14, 8), MaxWidth = bubbleWidth,
+            HorizontalAlignment = outgoing ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            Background = Brush(outgoing ? "BubbleOutgoing" : "BubbleIncoming"),
+            Margin = new Thickness(0, 4, 6, 4)
         };
         if (bubbles.Count == 50)
         {
@@ -1328,14 +1802,77 @@ internal sealed class MsgWindow : Shell
         }
         bubbles.Add(bubble);
         timeline.Children.Add(bubble);
-        refresh();
     }
 
     private void ClearTimeline()
     {
+        if (displayedPeer is { } key && conversations.Find(key) is { } conversation)
+            conversation.Messages.Clear();
+        ClearTimelineView();
+        refresh();
+    }
+
+    private void ClearTimelineView()
+    {
         foreach (var bubble in bubbles) timeline.Children.Remove(bubble);
         bubbles.Clear();
-        refresh();
+    }
+
+    private void LeaveConversation()
+    {
+        if (displayedPeer is { } key) conversations.Open(key).Draft = draft.Text;
+        displayedPeer = null;
+        restoringConversation = true;
+        try { draft.Clear(); draft.ClearUndo(); ClearTimelineView(); }
+        finally { restoringConversation = false; }
+    }
+
+    private void RestoreConversation()
+    {
+        string? key = ActivePeer;
+        if (key is null || string.Equals(displayedPeer, key, StringComparison.OrdinalIgnoreCase)) return;
+        LeaveConversation();
+        displayedPeer = key;
+        var conversation = conversations.Open(key);
+        restoringConversation = true;
+        try
+        {
+            draft.Text = conversation.Draft;
+            draft.ClearUndo();
+            foreach (var message in conversation.Messages) RenderBubble(message);
+        }
+        finally { restoringConversation = false; }
+    }
+
+    private void ClearSessionConversations()
+    {
+        LeaveConversation();
+        conversations.Clear();
+        knownContacts.Clear();
+        resetContactList();
+        sidebar?.Reset();
+    }
+
+    private void RefreshConversationList()
+    {
+        if (sidebar is null) return;
+        var contacts = knownContacts.Values.ToList();
+        if (ActivePeer is { } active && contacts.All(item => !string.Equals(item.Key, active, StringComparison.OrdinalIgnoreCase)))
+            contacts.Add(new SavedContact(peerName ?? "Neuer Kontakt", active, peerAddress));
+        var items = contacts.OrderByDescending(item => string.Equals(item.Key, ActivePeer, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(item =>
+            {
+                var conversation = conversations.Find(item.Key);
+                string detail = conversation?.Draft is { Length: > 0 } pending ? $"Entwurf: {pending}"
+                    : conversation?.Messages.LastOrDefault()?.Text ?? "Noch keine Nachrichten in dieser Sitzung";
+                detail = detail.Replace('\r', ' ').Replace('\n', ' ');
+                if (detail.Length > 90) detail = detail[..90] + "…";
+                bool selected = string.Equals(item.Key, ActivePeer, StringComparison.OrdinalIgnoreCase);
+                string state = selected ? linkState.Text : "Gespeicherter Kontakt";
+                return new ConversationSidebar.Item(item.Key, item.Name, detail, selected, state);
+            }).ToArray();
+        sidebar.Update(items, contactRequestsReady && contactRequestSession is { IsCancellationRequested: false }, !direct && !requireTwoCodes);
     }
 
     private static Border Badge(TextBlock label)

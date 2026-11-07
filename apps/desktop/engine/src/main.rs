@@ -101,6 +101,10 @@ enum Request {
         path: PathBuf,
         update: Option<ContactUpdate>,
     },
+    BlockedContacts {
+        path: PathBuf,
+        remove: Option<String>,
+    },
     Presence {
         path: PathBuf,
         peer: String,
@@ -144,6 +148,15 @@ struct SavedContact {
     name: String,
     key: String,
     address: Option<String>,
+    #[serde(default)]
+    verified: bool,
+}
+
+#[derive(Serialize)]
+struct StoredContact<'a> {
+    name: &'a str,
+    key: &'a str,
+    address: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -451,6 +464,16 @@ fn manage_contacts(
     let error = "Die verschlüsselte Kontaktliste konnte nicht gelesen oder gespeichert werden.";
     let mut contacts: Vec<SavedContact> =
         serde_json::from_slice(&book.read().map_err(|_| error)?).map_err(|_| error)?;
+    let verification = msg::ContactBook::verification(path, &identity).map_err(|_| error)?;
+    let mut verified_keys: Vec<String> =
+        serde_json::from_slice(&verification.read().map_err(|_| error)?).map_err(|_| error)?;
+    if verified_keys.len() > 256 || verified_keys.iter().any(|key| parse_key(key).is_err()) {
+        return Err(error.into());
+    }
+    verified_keys.retain(|key| contacts.iter().any(|contact| &contact.key == key));
+    for contact in &mut contacts {
+        contact.verified = verified_keys.contains(&contact.key);
+    }
     if let Some(update) = update {
         match update {
             ContactUpdate::Save { mut contact } => {
@@ -480,8 +503,30 @@ fn manage_contacts(
             }
         }
         contacts.sort_by(|left, right| left.name.cmp(&right.name));
-        let contents = Zeroizing::new(serde_json::to_vec(&contacts).map_err(|_| error)?);
+        let updated_verified: Vec<_> = contacts
+            .iter()
+            .filter(|contact| contact.verified)
+            .map(|contact| contact.key.clone())
+            .collect();
+        verified_keys.retain(|key| updated_verified.contains(key));
+        // Remove trust first, then update records, then add explicit comparisons.
+        // Partial writes and missing metadata can only reduce the displayed trust.
+        verification
+            .write(&serde_json::to_vec(&verified_keys).map_err(|_| error)?)
+            .map_err(|_| error)?;
+        let stored: Vec<_> = contacts
+            .iter()
+            .map(|contact| StoredContact {
+                name: &contact.name,
+                key: &contact.key,
+                address: contact.address.as_deref(),
+            })
+            .collect();
+        let contents = Zeroizing::new(serde_json::to_vec(&stored).map_err(|_| error)?);
         book.write(&contents).map_err(|_| error)?;
+        verification
+            .write(&serde_json::to_vec(&updated_verified).map_err(|_| error)?)
+            .map_err(|_| error)?;
     }
     let contents = Zeroizing::new(serde_json::to_string(&contacts).map_err(|_| error)?);
     Ok(Outcome::text("Kontaktliste geöffnet.", contents))
@@ -779,7 +824,7 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             if msg::ContactBook::require_two_codes(&path, &identity).map_err(msg_error)? {
                 return Err("Diese Identität verlangt zwei Kontaktcodes.".into());
             }
-            contact_request::listen(&identity)
+            contact_request::listen(&path, &identity)
         }
         Request::SendContactRequest {
             path,
@@ -795,6 +840,11 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             contact_request::send(&identity, &address, &own_address, socks_port)
         }
         Request::Contacts { path, update } => manage_contacts(&path, first, update),
+        Request::BlockedContacts { path, remove } => {
+            let identity = msg::Identity::load(&path, first).map_err(msg_error)?;
+            first.zeroize();
+            contact_request::blocked_contacts(&path, &identity, remove.as_deref())
+        }
         Request::Presence {
             path,
             peer,
@@ -954,4 +1004,53 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     serde_json::to_writer(&mut stdout, &response)?;
     stdout.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contact_save_preserves_legacy_records_and_tracks_optional_key_comparison() {
+        let directory =
+            std::env::temp_dir().join(format!("msg-contact-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("identity.kcmi");
+        let password = b"only a synthetic test passphrase";
+        let identity = msg::Identity::generate().unwrap();
+        identity.save(&path, password).unwrap();
+        let peer = format_key(&msg::Identity::generate().unwrap().public());
+        {
+            let store = msg::ContactBook::open(&path, &identity).unwrap();
+            let legacy =
+                serde_json::json!([{ "name": "Old contact", "key": peer, "address": null }]);
+            store.write(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        }
+        let legacy = manage_contacts(&path, password, None).unwrap();
+        let data: serde_json::Value =
+            serde_json::from_str(legacy.text.as_deref().unwrap()).unwrap();
+        assert_eq!(data[0]["verified"], false);
+        for verified in [false, true] {
+            let reply = manage_contacts(
+                &path,
+                password,
+                Some(ContactUpdate::Save {
+                    contact: SavedContact {
+                        name: "Chat contact".into(),
+                        key: peer.clone(),
+                        address: None,
+                        verified,
+                    },
+                }),
+            )
+            .unwrap();
+            let data: serde_json::Value =
+                serde_json::from_str(reply.text.as_deref().unwrap()).unwrap();
+            assert_eq!(data[0]["verified"], verified);
+            let store = msg::ContactBook::open(&path, &identity).unwrap();
+            let stored: serde_json::Value = serde_json::from_slice(&store.read().unwrap()).unwrap();
+            assert!(stored[0].get("verified").is_none());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

@@ -2,7 +2,7 @@
   <Import Project="../../desktop/windows/Desktop.props" />
   <PropertyGroup>
     <AssemblyName>KryptoCore-MSG</AssemblyName>
-    <Version>0.1.0-alpha.1</Version>
+    <Version>0.1.0-alpha.2-preview.4</Version>
     <ApplicationIcon>Assets/messenger.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

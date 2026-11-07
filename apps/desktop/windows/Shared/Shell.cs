@@ -18,6 +18,7 @@ internal abstract class Shell : Window
     private readonly ProgressBar progress = new() { Width = 52, Height = 4, IsIndeterminate = true };
     private readonly Button cancel;
     private readonly List<Button> tabs = [];
+    private readonly DockPanel footer;
     private CancellationTokenSource? cancellation;
     private bool busy;
 
@@ -65,7 +66,7 @@ internal abstract class Shell : Window
         heading.Children.Add(Text(description, 14, true));
         header.Children.Add(heading);
 
-        var footer = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 10, 0, 0) };
+        footer = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 10, 0, 0) };
         cancel = Button("Abbrechen", () => cancellation?.Cancel());
         cancel.Visibility = Visibility.Collapsed;
         DockPanel.SetDock(cancel, Dock.Right);
@@ -112,6 +113,7 @@ internal abstract class Shell : Window
             {
                 tab.Foreground = Brush(tab == selected ? "Base" : "Ink");
                 tab.Background = Brush(tab == selected ? "Mint" : "Card");
+                tab.Tag = tab == selected ? "selected" : "";
             }
             onSelect?.Invoke();
         }
@@ -122,6 +124,12 @@ internal abstract class Shell : Window
         navigation.Children.Add(button);
         if (tabs.Count == 1) Show(button);
         return () => Show(button);
+    }
+
+    protected void SetLayout(Func<StackPanel, ScrollViewer, FrameworkElement, FrameworkElement> compose)
+    {
+        if (Content is Panel previous) previous.Children.Clear();
+        Content = compose(navigation, scroll, footer);
     }
 
     protected async Task<bool> Run(string waiting, Func<CancellationToken, Task<Reply>> operation,

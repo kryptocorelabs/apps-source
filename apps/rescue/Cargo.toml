@@ -1,0 +1,19 @@
+[package]
+name = "kryptocore-rescue"
+version = "0.1.0-preview.2"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+license = "MIT"
+description = "Offline authenticated recovery exports for KryptoCore application files"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+kryptocore-vault-format = { path = "../../modules/vault-format" }
+kryptocore-container = { path = "../container" }
+tempfile = "3"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

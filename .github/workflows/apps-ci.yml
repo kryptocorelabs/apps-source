@@ -33,8 +33,27 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable build --locked --release -p kryptocore-rescue
       - run: dotnet build apps/msg/windows/Msg.csproj -c Release
       - run: dotnet build apps/container/windows/Container.csproj -c Release
+      - name: Build Rescue with its embedded worker
+        shell: pwsh
+        run: dotnet build apps/rescue/windows/Rescue.csproj -c Release "-p:RescueEnginePath=$PWD/target/release/kryptocore-rescue.exe"
+      - name: Test per-contact message and draft isolation
+        run: |
+          dotnet build apps/msg/tests/windows/Check.csproj -o dist/msg-ui-check
+          dotnet dist/msg-ui-check/Check.dll --session-only
+      - name: Test Rescue credential and export workflow
+        run: |
+          dotnet build apps/rescue/tests/windows/Check.csproj -o dist/rescue-ui-check
+          dotnet dist/rescue-ui-check/Check.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: rescue-ui-check
+          path: dist/rescue-ui-check/rescue.png
+          if-no-files-found: ignore
 
   dependencies:
     runs-on: ubuntu-24.04

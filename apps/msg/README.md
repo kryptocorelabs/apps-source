@@ -3,18 +3,39 @@
 MSG opens an encrypted chat channel for messages and files. Both people must
 be online. The Windows app includes Tor and starts it when needed.
 
+The Windows development interface follows the supplied GetMusic 3.11 Aura
+visual reference: muted blue surfaces, mint accents, rounded panels and a
+compact borderless window. Navigation sits in a left rail, with contacts
+beside the conversation and a fixed message composer. Use **+** beside the
+composer to attach a file. Profile and connection options remain available
+in the navigation rail.
+
 ## Start a conversation
 
 1. Open or create an identity under **Mein Profil**. Enter your passphrase
    once to unlock MSG for the session.
-2. Under **Kontakte**, open an invitation or choose a saved contact. Create
-   your own invitations under **Mein Profil**.
-3. Both people select **Chatkanal öffnen** under **Nachrichten**. Once
-   **Chatkanal offen** appears, either person can write or send a file.
+2. In the left-hand **Chats** panel, choose **Meine Adresse** to copy your
+   Tor address and enable incoming requests for the session. Choose
+   **Neuer Kontakt** to enter someone else's address.
+3. The recipient chooses **Annehmen** in the request popup. The chat opens
+   on both devices automatically. Once **Verbunden** appears, either person
+   can write or send a file. Invitations remain available under **Kontakte**
+   and **Mein Profil**.
 4. Use **Mein Profil → MSG sperren** to close the channel and lock the app.
 
-The app keeps up to 50 message bubbles in memory and does not save chat
-history. Copy anything you need before closing or changing contacts.
+The Windows development preview has a searchable chat sidebar. Saved
+contacts load when an identity opens. Selecting a contact requests a chat;
+selecting the already active contact keeps its connection. One conversation
+can be connected at a time. Changing contacts closes the previous connection.
+
+Messages and drafts are separated by contact key in memory. The 20 most
+recently opened conversations retain up to 50 messages each for the current
+unlocked session; older cached conversations, including drafts, may be
+evicted. The app does not write these contents to disk. Locking, changing
+identity or closing clears the session cache. This is not a permanent chat
+archive. **Dateien & Privatsphäre → Verlauf leeren** clears the selected
+conversation's cached messages. Enter sends a message. The current protocol
+accepts single-line messages; visual wrapping does not insert line breaks.
 
 ## Invitations
 
@@ -43,15 +64,23 @@ code. Private identity files and identity passphrases stay with their owner.
 
 ## Contact requests using a Tor address
 
-Under **Kontakte → Kontakt per Tor-Adresse**, enter the other person's
-bare .onion address or their address with port and select **Anfrage senden**.
-The other person must enable **Anfragen erlauben** and explicitly choose
-**Annehmen** or **Ablehnen**. An unanswered request expires after 45 seconds.
+Choose **Neuer Kontakt**, enter the other person's bare .onion address
+or their address with port and select **Verbindung anfragen**. The recipient
+must enable incoming requests. A popup offers **Annehmen**, **Ablehnen** and
+**Blockieren**. An unanswered request expires after 45 seconds.
 
-Incoming requests are off by default. **Anfragen ausschalten**, locking
+Incoming requests are off by default. **Keine neuen Anfragen**, locking
 MSG, switching to direct IP or changing the Tor address stops the listener.
-Acceptance exchanges the keys and routes for a later chat. It does not
-automatically open a chat or accept files.
+Acceptance exchanges the keys and routes and opens the encrypted chat on
+both devices. Accepting another request switches away from the current
+chat; the popup explains this before acceptance. It does not automatically
+save the contact or an incoming file.
+
+Blocking saves the requesting identity's public key in an encrypted
+identity-bound list. Further requests using that key are rejected without
+a popup. Remove a block under **Einstellungen → Blockierte Kontakte**.
+Someone can create a different identity, so this is not a way to block a
+person across all possible identities.
 
 Sending a request shares your MSG public key and your Tor return address
 with the destination. The request uses Noise XN over the Tor onion service.
@@ -67,9 +96,21 @@ this feature is enabled.
 ## Contacts and settings
 
 **Kontakte → Meine Kontakte** loads automatically when you open the tab.
-Save a compared contact under a name, select an existing contact or remove
-one. The encrypted contact list is stored beside the identity as
-`.kcmi.contacts`. Back up both files. A lock file coordinates edits.
+In a chat, choose **Kontakt übernehmen**, enter a name and save. A personal
+key comparison is optional and is recorded separately; saving a contact
+does not claim that a comparison happened. A saved Tor contact requests a
+new chat and checks that the returned key matches the saved key.
+
+Use the **Chats** search field to filter saved contacts without changing
+the active connection or draft. The active row shows the connection state;
+other saved rows do not claim that the other person is online. Presence
+sharing remains an explicit choice for both participants.
+
+The encrypted contact list is stored beside the identity as `.kcmi.contacts`.
+The `.kcmi.verification` and `.kcmi.blocked` sidecars hold comparison metadata
+and blocked keys. Back up the identity and its sidecars together. Missing
+comparison metadata displays contacts as not compared. Existing contact
+records retain their file format. Lock files coordinate edits.
 
 Under **Einstellungen → Kontakte & Freigaben**, you can require a mutual
 exchange of two codes. This setting is saved for the identity and disables
@@ -82,11 +123,19 @@ resets it. This indicator describes the current open chat.
 
 ## Files
 
-Use **Datei senden** for a regular file up to 16 MiB. The recipient first
-selects **Empfangsordner wählen** in the open chat. Files are stored with
-an `MSG-` prefix after complete receipt. Existing files with the same name
-are preserved. A receipt confirms that the other app accepted the message
-or saved the attachment. An unconfirmed transfer may have arrived.
+Use **Datei senden** for a regular file up to 16 MiB. Without a selected
+receive folder, a popup offers **Speichern unter …**, **Ordner wählen …**
+or **Ablehnen**. Choosing a folder also sets it for subsequent files in the
+current chat; these use an `MSG-` filename prefix. Save-as uses the selected
+name. Existing files are never replaced.
+
+While waiting for a decision, one incoming attachment remains in bounded
+memory and the chat can receive and answer messages. Closing the popup or
+cancelling a save picker leaves an inline save offer. A failed save retains
+the offer for retry. Closing or locking the chat discards unsaved data.
+A receipt confirms that the other app accepted the message or saved the
+attachment. An unconfirmed transfer may have arrived. Automatic saving to
+a chosen folder does not scan files for malware or open them.
 
 ## Tor and direct connections
 
@@ -108,6 +157,26 @@ access. Use Tor if your networks block incoming connections. Legacy KCM1
 codes can be read in direct mode and contain their route in plaintext.
 
 ## Security boundaries
+
+The connection marker is tied to the authenticated chat state:
+
+- Grey: no confirmed active channel.
+- Amber: connecting or awaiting cryptographic confirmation.
+- Green with a steady soft glow: the selected peer key passed the Noise
+  handshake and both encrypted ready confirmations completed.
+- Red: the connection attempt failed; no confirmed channel is active.
+
+Starting Tor, accepting a request or marking a key as personally compared
+does not turn this marker green. Local cancellation and locking disable it
+when the session is canceled; a detected remote close also clears it.
+An idle or broken network link can take time to report failure. The marker
+describes the established cryptographic channel, not a continuous online
+probe or a guarantee about the peer's device or real-world identity.
+
+The Rust tests reject unknown peer keys, absent or corrupt encrypted ready
+confirmations and tampered message ciphertext. Windows integration checks
+also reject a saved-key mismatch and verify the marker before connection,
+after confirmation and after local cancellation/locking.
 
 - Chat uses Noise KK through Snow with fresh ephemeral keys and the
   `KryptoCore MSG chat v1` context. Both peers pin the selected MSG key.
