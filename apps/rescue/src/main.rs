@@ -27,7 +27,7 @@ enum Request {
 
 fn request(reader: &mut impl Read) -> Result<(Request, Zeroizing<Vec<u8>>), &'static str> {
     let metadata = frame(reader, 64 * 1024)?;
-    let secret = Zeroizing::new(frame(reader, 1024)?);
+    let secret = frame(reader, 1024)?;
     frame(reader, 0)?;
     let action: Request =
         serde_json::from_slice(&metadata).map_err(|_| "Invalid recovery request.")?;
@@ -45,7 +45,7 @@ fn request(reader: &mut impl Read) -> Result<(Request, Zeroizing<Vec<u8>>), &'st
     Ok((action, secret))
 }
 
-fn frame(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, &'static str> {
+fn frame(reader: &mut impl Read, limit: usize) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     let mut length = [0; 4];
     reader
         .read_exact(&mut length)
@@ -54,7 +54,9 @@ fn frame(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, &'static str> 
     if length > limit {
         return Err("Request exceeds the supported limit.");
     }
-    let mut bytes = vec![0; length];
+    // Own a zeroizing buffer before reading: partial credentials are also
+    // cleared if an incomplete frame makes read_exact fail.
+    let mut bytes = Zeroizing::new(vec![0; length]);
     reader
         .read_exact(&mut bytes)
         .map_err(|_| "Incomplete request.")?;
@@ -152,5 +154,10 @@ mod tests {
         let recover = br#"{"action":"recover","input":"sample.kcv","output":"new.json","credential":"recovery_key","confirm_plaintext":true}"#;
         assert!(request(&mut bytes(recover, b"secret").as_slice()).is_ok());
         assert!(request(&mut bytes(recover, &vec![0; 1025]).as_slice()).is_err());
+        let mut incomplete = bytes(recover, b"");
+        incomplete.truncate(4 + recover.len());
+        incomplete.extend_from_slice(&32_u32.to_le_bytes());
+        incomplete.extend_from_slice(b"partial credential");
+        assert!(request(&mut incomplete.as_slice()).is_err());
     }
 }
