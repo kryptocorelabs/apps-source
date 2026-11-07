@@ -2,12 +2,31 @@ use super::*;
 
 const PASSWORD: &[u8] = b"synthetic test password only";
 const RECOVERY: &[u8] = b"synthetic recovery credential only";
+struct TestDirectory {
+    _owner: tempfile::TempDir,
+    canonical: std::path::PathBuf,
+}
+impl TestDirectory {
+    fn new() -> Self {
+        let owner = tempfile::tempdir().unwrap();
+        // macOS /var and /tmp are symlinks. Select the actual trusted folder,
+        // keeping the production rejection of linked destinations intact.
+        let canonical = owner.path().canonicalize().unwrap();
+        Self {
+            _owner: owner,
+            canonical,
+        }
+    }
+    fn path(&self) -> &Path {
+        &self.canonical
+    }
+}
 const ENTRIES: &[u8] =
     br#"[{"origin":"example.test","username":"synthetic user","password":"synthetic secret"}]"#;
 
 #[test]
 fn vault_legacy_and_recovery_slot_export_without_touching_sources() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = TestDirectory::new();
     let input = dir.path().join("source.kcv");
     kryptocore_vault_format::save(&input, PASSWORD, ENTRIES, true).unwrap();
     let before = fs::read(&input).unwrap();
@@ -32,7 +51,7 @@ fn vault_legacy_and_recovery_slot_export_without_touching_sources() {
 
 #[test]
 fn wrong_credentials_damage_and_invalid_records_never_publish_vault_output() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = TestDirectory::new();
     let input = dir.path().join("source.kcv");
     let output = dir.path().join("export.json");
     kryptocore_vault_format::save(&input, PASSWORD, ENTRIES, true).unwrap();
@@ -54,7 +73,7 @@ fn wrong_credentials_damage_and_invalid_records_never_publish_vault_output() {
 
 #[test]
 fn plaintext_confirmation_and_no_overwrite_are_mandatory() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = TestDirectory::new();
     let input = dir.path().join("source.kcv");
     let output = dir.path().join("existing.json");
     kryptocore_vault_format::save(&input, PASSWORD, ENTRIES, true).unwrap();
@@ -76,7 +95,7 @@ fn plaintext_confirmation_and_no_overwrite_are_mandatory() {
 
 #[test]
 fn ordinary_and_executable_containers_reuse_the_authenticated_extractor() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = TestDirectory::new();
     let plain = dir.path().join("synthetic.txt");
     fs::write(&plain, b"example data").unwrap();
     let archive = dir.path().join("source.kcc");
