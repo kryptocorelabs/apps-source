@@ -16,7 +16,12 @@ output.mkdir(parents=True, exist_ok=True)
 system = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}[sys.platform]
 arch = {'AMD64': 'x86_64', 'x86_64': 'x86_64', 'arm64': 'aarch64', 'aarch64': 'aarch64'}[platform.machine()]
 target = system + '-' + arch
-subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'kryptocore-verify'], cwd=root, check=True)
+build_env = dict(os.environ)
+if system == 'windows':
+    # Keep the small native checker usable without a separate VC runtime install.
+    build_env.pop('CARGO_ENCODED_RUSTFLAGS', None)
+    build_env['RUSTFLAGS'] = build_env.get('RUSTFLAGS', '') + ' -C target-feature=+crt-static'
+subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'kryptocore-verify'], cwd=root, env=build_env, check=True)
 binary = Path(os.environ.get('CARGO_TARGET_DIR', root / 'target')).resolve() / 'release' / ('kryptocore-verify' + ('.exe' if system == 'windows' else ''))
 subprocess.run([str(binary), '--help'], check=True)
 stage = output / ('KryptoCore-Verify-' + target)
@@ -40,5 +45,6 @@ digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 (output / 'BUILD-MANIFEST.json').write_text(json.dumps(dict(
     source_commit=os.environ.get('GITHUB_SHA', 'local-working-tree'), target=target,
     version='0.1.0-preview.1', archive=archive.name, sha256=digest,
-    publisher_signed=False, official_release_key_provisioned=False), indent=2) + '\n', encoding='utf-8')
+    publisher_signed=False, official_release_key_provisioned=False,
+    windows_crt_static=system == 'windows'), indent=2) + '\n', encoding='utf-8')
 print('Packaged:', archive)
