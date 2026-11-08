@@ -141,6 +141,8 @@ fn write_file(path: &Path, chunks: &[&[u8]], create: bool) -> Result<(), &'stati
 }
 
 fn payload_key(seed: &[u8]) -> Result<Key, &'static str> {
+    // Part of the existing KCV2 profile. Changing this KDF requires a new
+    // format version; readers must not silently reinterpret existing files.
     derive_key(seed, b"KCV2 payload key").map_err(|_| "Schlüsselableitung fehlgeschlagen")
 }
 
@@ -213,18 +215,22 @@ pub fn enable_recovery(
     write_payload(path, &payload_key(&seed[..])?, &header, &data, create)
 }
 
+/// Authenticate recovery access, rotate the payload seed and replace both slots.
+/// The recovery secret stays valid. Previously copied files cannot be revoked.
 pub fn reset_password(
     path: &Path,
     recovery: &[u8],
     password: &[u8],
 ) -> Result<Vec<crate::Login>, &'static str> {
     let file = read(path)?;
-    let (seed, data) = open_recoverable(&file, recovery, 1)?;
+    let data = open_recoverable(&file, recovery, 1)?.1;
     let entries = serde_json::from_slice(&data).map_err(|_| "Ungültige Tresoreinträge")?;
+    let mut seed = Zeroizing::new([0; 32]);
+    getrandom::fill(&mut seed[..]).map_err(|_| "Zufallsquelle nicht verfügbar")?;
     let mut header = RECOVERY_HEADER.to_vec();
-    append_slot(&mut header, password, 0, &seed)?;
-    header.extend_from_slice(&file[RECOVERY_HEADER.len() + SLOT_LEN..RECOVERY_AAD_LEN]);
-    write_payload(path, &payload_key(&seed)?, &header, &data, false)?;
+    append_slot(&mut header, password, 0, &seed[..])?;
+    append_slot(&mut header, recovery, 1, &seed[..])?;
+    write_payload(path, &payload_key(&seed[..])?, &header, &data, false)?;
     Ok(entries)
 }
 
@@ -253,6 +259,139 @@ mod tests {
         reset_password(&path, recovery, new).unwrap();
         assert!(open(&path, old).is_err());
         assert_eq!(&open(&path, new).unwrap()[..], ENTRIES);
+    }
+
+    #[test]
+    fn password_reset_rotates_seed_and_rejects_keys_from_an_old_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("vault.kcv");
+        let old = b"old synthetic vault password";
+        let new = b"new synthetic vault password";
+        enable_recovery(&path, old, RECOVERY, true).unwrap();
+        save(&path, old, ENTRIES, false).unwrap();
+        let stolen = read(&path).unwrap();
+        // Model an attacker who unlocked an earlier copy, not just an old slot.
+        let (old_seed, _) = open_recoverable(&stolen, old, 0).unwrap();
+        let old_key = payload_key(&old_seed).unwrap();
+
+        reset_password(&path, RECOVERY, new).unwrap();
+        let current = read(&path).unwrap();
+        let (new_seed, recovered) = open_recoverable(&current, RECOVERY, 1).unwrap();
+        assert_eq!(&recovered[..], ENTRIES);
+        assert_eq!(&open(&path, new).unwrap()[..], ENTRIES);
+        assert!(open(&path, old).is_err());
+        assert!(save(&path, old, b"[]", false).is_err());
+        assert_eq!(read(&path).unwrap(), current);
+
+        let reject_old_key = |file: &[u8]| {
+            let nonce = file[RECOVERY_AAD_LEN..RECOVERY_AAD_LEN + 24]
+                .try_into()
+                .unwrap();
+            assert!(decrypt(
+                &old_key,
+                &nonce,
+                &file[RECOVERY_AAD_LEN + 24..],
+                &file[..RECOVERY_AAD_LEN]
+            )
+            .is_err());
+        };
+        reject_old_key(&current);
+        assert_ne!(&old_seed[..], &new_seed[..]);
+        save(&path, new, b"[]", false).unwrap();
+        reject_old_key(&read(&path).unwrap());
+        // Re-keying cannot revoke data or credentials in the stolen snapshot.
+        assert_eq!(&open_bytes(&stolen, old).unwrap()[..], ENTRIES);
+        assert_eq!(
+            &open_recoverable(&stolen, RECOVERY, 1).unwrap().1[..],
+            ENTRIES
+        );
+    }
+
+    #[test]
+    fn ordinary_saves_keep_seed_and_slots_but_refresh_the_payload_nonce() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("vault.kcv");
+        let password = b"synthetic vault password";
+        enable_recovery(&path, password, RECOVERY, true).unwrap();
+        let before = read(&path).unwrap();
+        let (seed, _) = open_recoverable(&before, password, 0).unwrap();
+        save(&path, password, ENTRIES, false).unwrap();
+        let after = read(&path).unwrap();
+        let (saved_seed, data) = open_recoverable(&after, RECOVERY, 1).unwrap();
+        assert_eq!(&seed[..], &saved_seed[..]);
+        assert_eq!(&before[..RECOVERY_AAD_LEN], &after[..RECOVERY_AAD_LEN]);
+        assert_ne!(
+            &before[RECOVERY_AAD_LEN..RECOVERY_AAD_LEN + 24],
+            &after[RECOVERY_AAD_LEN..RECOVERY_AAD_LEN + 24]
+        );
+        assert_eq!(&data[..], ENTRIES);
+    }
+
+    #[test]
+    fn renewed_recovery_and_repeated_resets_keep_snapshots_independent() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("vault.kcv");
+        let password = b"synthetic vault password";
+        let new_recovery = b"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        enable_recovery(&path, password, RECOVERY, true).unwrap();
+        save(&path, password, ENTRIES, false).unwrap();
+        let original = read(&path).unwrap();
+        let (seed, _) = open_recoverable(&original, RECOVERY, 1).unwrap();
+        enable_recovery(&path, password, new_recovery, false).unwrap();
+        let renewed = read(&path).unwrap();
+        let (renewed_seed, _) = open_recoverable(&renewed, password, 0).unwrap();
+        assert_ne!(&seed[..], &renewed_seed[..]);
+        assert!(open_with_recovery(&path, RECOVERY).is_err());
+        assert!(reset_password(&path, RECOVERY, b"rejected replacement password").is_err());
+        assert_eq!(read(&path).unwrap(), renewed);
+
+        let mut previous_seed = renewed_seed;
+        for next_password in [
+            b"first replacement password".as_slice(),
+            b"second replacement password",
+        ] {
+            reset_password(&path, new_recovery, next_password).unwrap();
+            let snapshot = read(&path).unwrap();
+            let (next_seed, data) = open_recoverable(&snapshot, new_recovery, 1).unwrap();
+            assert_ne!(&previous_seed[..], &next_seed[..]);
+            assert_eq!(&data[..], ENTRIES);
+            assert_eq!(&open_bytes(&snapshot, next_password).unwrap()[..], ENTRIES);
+            previous_seed = next_seed;
+        }
+        assert_eq!(&open_bytes(&original, password).unwrap()[..], ENTRIES);
+        assert_eq!(
+            &open_recoverable(&original, RECOVERY, 1).unwrap().1[..],
+            ENTRIES
+        );
+        assert_eq!(
+            &open_recoverable(&renewed, new_recovery, 1).unwrap().1[..],
+            ENTRIES
+        );
+    }
+
+    #[test]
+    fn reset_rejects_damaged_and_legacy_files_without_replacing_them() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("vault.kcv");
+        let password = b"synthetic vault password";
+        save(&path, password, ENTRIES, true).unwrap();
+        let legacy = read(&path).unwrap();
+        assert!(reset_password(&path, RECOVERY, password).is_err());
+        assert_eq!(read(&path).unwrap(), legacy);
+        enable_recovery(&path, password, RECOVERY, false).unwrap();
+        let original = read(&path).unwrap();
+        for offset in [
+            RECOVERY_HEADER.len(),
+            RECOVERY_HEADER.len() + SLOT_LEN,
+            RECOVERY_AAD_LEN,
+            original.len() - 1,
+        ] {
+            let mut damaged = original.clone();
+            damaged[offset] ^= 1;
+            std::fs::write(&path, &damaged).unwrap();
+            assert!(reset_password(&path, RECOVERY, password).is_err());
+            assert_eq!(read(&path).unwrap(), damaged);
+        }
     }
 
     #[test]
