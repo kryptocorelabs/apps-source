@@ -1,6 +1,6 @@
 [package]
 name = "kryptocore-container"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2-preview.1"
 edition = "2021"
 publish = false
 
@@ -8,6 +8,7 @@ publish = false
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "stream"] }
 getrandom = "0.3"
 kryptocore = { path = "../.." }
+kryptocore-signatures = { path = "../../modules/signatures" }
 rpassword = "7.5.4"
 sha2 = "0.10.9"
 tempfile = "3.27.0"

@@ -60,3 +60,12 @@ Signing cannot certify malware absence or the identity of an unknown person.
 Memory clearing is limited to owned buffers and upstream guarantees. Concurrent
 request limits, UI trust decisions, key compromise and independent review
 remain outside this module's test result.
+
+## Application integration update — 2026-11-08
+
+Container and Rescue now use the unchanged companion API for the versioned
+[KCC sender-signature protocol](https://github.com/kryptocorelabs/container/blob/main/SIGNATURES.md).
+This is an application-owned detached manifest, not a Core encryption format
+change. The prior validation above is a historical component snapshot.
+Application tests include an independent PyNaCl wire fixture, same-stream
+verification, encrypted signing-key access and scan/publication ordering.

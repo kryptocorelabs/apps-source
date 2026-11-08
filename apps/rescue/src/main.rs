@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kryptocore_rescue::{inspect, recover, CredentialRoute};
+use kryptocore_rescue::{inspect, recover_with_options, CredentialRoute, RecoveryOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -22,6 +22,8 @@ enum Request {
         output: PathBuf,
         credential: CredentialRoute,
         confirm_plaintext: bool,
+        #[serde(default)]
+        options: RecoveryOptions,
     },
 }
 
@@ -77,9 +79,17 @@ fn run(action: Request, secret: &[u8]) -> Result<Value, String> {
             output,
             credential,
             confirm_plaintext,
+            options,
         } => {
-            let result = recover(&input, &output, credential, secret, confirm_plaintext)
-                .map_err(|e| e.to_string())?;
+            let result = recover_with_options(
+                &input,
+                &output,
+                credential,
+                secret,
+                confirm_plaintext,
+                &options,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(
                 json!({"ok":true,"message":"Authenticated export completed. The output is unencrypted; the source is unchanged.",
                 "text":serde_json::to_string(&result).expect("recovery summary")}),

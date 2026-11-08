@@ -34,9 +34,11 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: rustup toolchain install stable --profile minimal
-      - run: cargo +stable build --locked --release -p kryptocore-rescue
+      - run: cargo +stable build --locked --release -p kryptocore-rescue -p kryptocore-desktop-engine
       - run: dotnet build apps/msg/windows/Msg.csproj -c Release
-      - run: dotnet build apps/container/windows/Container.csproj -c Release
+      - name: Build Container with its embedded worker
+        shell: pwsh
+        run: dotnet build apps/container/windows/Container.csproj -c Release "-p:DesktopEnginePath=$PWD/target/release/kryptocore-desktop-engine.exe"
       - name: Build Rescue with its embedded worker
         shell: pwsh
         run: dotnet build apps/rescue/windows/Rescue.csproj -c Release "-p:RescueEnginePath=$PWD/target/release/kryptocore-rescue.exe"
@@ -44,10 +46,14 @@ jobs:
         run: |
           dotnet build apps/msg/tests/windows/Check.csproj -o dist/msg-ui-check
           dotnet dist/msg-ui-check/Check.dll --session-only
+      - name: Test Container shared signatures and scanner gates
+        run: |
+          dotnet build apps/container/tests/windows/Check.csproj -o dist/container-ui-check
+          dotnet dist/container-ui-check/Check.dll apps/container/windows/bin/Release/net10.0-windows/KryptoCore-Container.dll
       - name: Test Rescue credential and export workflow
         run: |
           dotnet build apps/rescue/tests/windows/Check.csproj -o dist/rescue-ui-check
-          dotnet dist/rescue-ui-check/Check.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll
+          dotnet dist/rescue-ui-check/Check.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll dist/container-ui-check/native-fixture.json
       - uses: actions/upload-artifact@v6
         if: always()
         with:

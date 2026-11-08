@@ -1,5 +1,6 @@
 use crate::{inspect, CredentialRoute, Format};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::{fs, io::Write, path::Path};
 use tempfile::NamedTempFile;
 
@@ -12,6 +13,8 @@ pub enum RecoveryError {
     AuthenticationOrData,
     WriteFailed,
     PlaintextNotConfirmed,
+    SignatureRejected,
+    ScanRejected,
 }
 
 impl std::fmt::Display for RecoveryError {
@@ -30,6 +33,8 @@ impl std::fmt::Display for RecoveryError {
                 "Output could not be completed. Check the destination and free space."
             }
             Self::PlaintextNotConfirmed => "Explicit confirmation of plaintext output is required.",
+            Self::SignatureRejected => "Sender signature rejected or expected public key missing. No output was published.",
+            Self::ScanRejected => "The selected malware scan detected a threat, failed, or could not cover the input. No output was published.",
         })
     }
 }
@@ -42,6 +47,16 @@ pub struct RecoverySummary {
     pub content_authenticated: bool,
     pub entries: usize,
     pub bytes: u64,
+    pub signature: &'static str,
+    pub malware_scan: &'static str,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryOptions {
+    pub signature: Option<PathBuf>,
+    pub expected_public: Option<String>,
+    pub scanner: Option<PathBuf>,
 }
 
 /// Authenticate with the original format reader, then publish a fresh plaintext
@@ -54,6 +69,24 @@ pub fn recover(
     secret: &[u8],
     confirm_plaintext: bool,
 ) -> Result<RecoverySummary, RecoveryError> {
+    recover_with_options(
+        input,
+        output,
+        route,
+        secret,
+        confirm_plaintext,
+        &RecoveryOptions::default(),
+    )
+}
+
+pub fn recover_with_options(
+    input: &Path,
+    output: &Path,
+    route: CredentialRoute,
+    secret: &[u8],
+    confirm_plaintext: bool,
+    options: &RecoveryOptions,
+) -> Result<RecoverySummary, RecoveryError> {
     if !confirm_plaintext {
         return Err(RecoveryError::PlaintextNotConfirmed);
     }
@@ -61,6 +94,23 @@ pub fn recover(
         return Err(RecoveryError::Credential);
     }
     let source = inspect(input).map_err(|_| RecoveryError::InvalidSource)?;
+    let verification = match (&options.signature, &options.expected_public) {
+        (None, None) => None,
+        (Some(path), Some(expected))
+            if matches!(
+                source.format,
+                Format::ContainerV1 | Format::EmbeddedContainerV1
+            ) =>
+        {
+            Some(
+                kryptocore_container::native_signature::Verification::from_file(path, expected)
+                    .map_err(|_| RecoveryError::SignatureRejected)?,
+            )
+        }
+        _ => return Err(RecoveryError::SignatureRejected),
+    };
+    let scan =
+        |path: &Path| kryptocore_container::scanner::inspect(path, options.scanner.as_deref());
     if !source.credential_routes.contains(&route) {
         return Err(RecoveryError::Credential);
     }
@@ -110,24 +160,31 @@ pub fn recover(
                 .as_file()
                 .sync_all()
                 .map_err(|_| RecoveryError::WriteFailed)?;
+            scan(temporary.path()).map_err(|_| RecoveryError::ScanRejected)?;
             temporary
                 .persist_noclobber(output)
                 .map_err(|_| RecoveryError::WriteFailed)?;
             (records.len(), plaintext.len() as u64)
         }
         Format::ContainerV1 | Format::EmbeddedContainerV1 => {
-            let result = if source.format == Format::ContainerV1 {
-                kryptocore_container::unpack(input, output, secret)
-            } else {
-                kryptocore_container::unpack_executable_with_inspection(
-                    input,
-                    output,
-                    secret,
-                    |_| Ok(()),
-                )
-            }
+            let result = kryptocore_container::unpack_protected(
+                input,
+                output,
+                secret,
+                kryptocore_container::OpenPolicy {
+                    embedded: source.format == Format::EmbeddedContainerV1,
+                    native: verification.as_ref(),
+                    openssh: None,
+                    scanner: options.scanner.as_deref(),
+                },
+            )
             .map_err(|error| match error {
                 kryptocore_container::Error::Io(_) => RecoveryError::WriteFailed,
+                kryptocore_container::Error::SignatureRejected => RecoveryError::SignatureRejected,
+                kryptocore_container::Error::ScanRejected => RecoveryError::ScanRejected,
+                kryptocore_container::Error::Format(_) if options.scanner.is_some() => {
+                    RecoveryError::ScanRejected
+                }
                 _ => RecoveryError::AuthenticationOrData,
             })?;
             (result.entries, result.bytes)
@@ -140,6 +197,16 @@ pub fn recover(
         content_authenticated: true,
         entries,
         bytes,
+        signature: if verification.is_some() {
+            "verified_expected_key"
+        } else {
+            "not_checked"
+        },
+        malware_scan: if options.scanner.is_some() {
+            "completed_no_detection"
+        } else {
+            "not_requested"
+        },
     })
 }
 

@@ -23,6 +23,12 @@ internal sealed class RescueWindow : Shell
     private readonly TextBox destination = new() { IsReadOnly = true, IsUndoEnabled = false };
     private readonly CheckBox plaintext = new() { Content = "Ich weiß: Die Ausgabe enthält unverschlüsselte Daten.", Margin = new Thickness(0, 12, 0, 12) };
     private readonly Button restore;
+    private readonly CheckBox signed = new() { Content = "Absendersignatur prüfen (Container)", Margin = new Thickness(0, 8, 0, 6) };
+    private readonly CheckBox scan = new() { Content = "Vor der Freigabe lokal mit ClamAV scannen", Margin = new Thickness(0, 8, 0, 6) };
+    private readonly TextBox expectedPublic = new();
+    private TextBox signature = null!;
+    private TextBox scanner = null!;
+    private readonly TextBlock checks = Text("Absender nicht geprüft · Kein Malware-Scan angefordert", 12, true);
 
     private sealed record Inspection(
         [property: JsonPropertyName("schema_version")] int Schema,
@@ -63,7 +69,7 @@ internal sealed class RescueWindow : Shell
         details.Children.Add(access);
         details.Children.Add(Text("Die Dateikennung allein bestätigt keine Echtheit. Erst eine erfolgreiche Entschlüsselung prüft die Inhalte. Der Diagnosebericht enthält keine Passwörter, Inhalte oder Dateipfade.", 13, true));
         var recovery = Section("Daten retten", "Vault als JSON-Datei · Container in einen neuen Ordner");
-        recovery.Children.Add(Text("Die Ausgabe ist unverschlüsselt. Wähle einen geschützten Speicherort und behandle sie wie die Originaldaten. Dateien werden nicht automatisch geöffnet; ein Virenscan ist nicht enthalten.", 14, true));
+        recovery.Children.Add(Text("Die Ausgabe ist unverschlüsselt. Wähle einen geschützten Speicherort. Absendersignaturen und ein lokaler Malware-Scan sind getrennte, optionale Prüfungen. Dateien werden nie automatisch geöffnet.", 14, true));
         credential.Items.Add(new ComboBoxItem { Content = "Passwort", Tag = "password" });
         credential.Items.Add(new ComboBoxItem { Content = "Wiederherstellungsschlüssel (nur KCV2)", Tag = "recovery_key", IsEnabled = false });
         credential.SelectedIndex = 0;
@@ -71,6 +77,18 @@ internal sealed class RescueWindow : Shell
         Field(recovery, "Passwort oder Wiederherstellungsschlüssel", secret);
         Field(recovery, "Neues Ziel", destination);
         recovery.Children.Add(Button("Speicherort wählen …", ChooseDestination));
+        var optional = new StackPanel();
+        var signerFields = new StackPanel { Visibility = Visibility.Collapsed };
+        signature = PathField(signerFields, "KryptoCore-Signatur (.kcsig)", "KryptoCore-Signatur (*.kcsig)|*.kcsig");
+        Field(signerFields, "Separat bestätigter öffentlicher Code (KCP1:…)", expectedPublic);
+        signerFields.Children.Add(Text("Den Code über einen vertrauenswürdigen Kanal beim Absender bestätigen. Eine mitgelieferte Signatur macht einen Schlüssel nicht vertrauenswürdig.", 12, true));
+        var scanFields = new StackPanel { Visibility = Visibility.Collapsed };
+        scanner = PathField(scanFields, "Vertrauenswürdiges clamscan.exe", "Programm (*.exe)|*.exe");
+        scanFields.Children.Add(Text("ClamAV muss mit aktueller Datenbank installiert sein. Limit: 100 MiB je Datei, 400 MiB insgesamt. Erkennung oder Scanfehler blockiert den Export. Keine Erkennung ist keine Virenfreiheitsgarantie.", 12, true));
+        optional.Children.Add(signed); optional.Children.Add(signerFields);
+        optional.Children.Add(scan); optional.Children.Add(scanFields);
+        recovery.Children.Add(new Expander { Header = "Absender & Malware-Prüfung", Content = optional, Margin = new Thickness(0, 10, 0, 0) });
+        recovery.Children.Add(checks);
         recovery.Children.Add(plaintext);
         restore = Button("Entschlüsseln und exportieren", async () => await Recover(), true);
         restore.IsEnabled = false;
@@ -80,6 +98,13 @@ internal sealed class RescueWindow : Shell
         destination.TextChanged += (_, _) => UpdateRecovery();
         plaintext.Checked += (_, _) => UpdateRecovery();
         plaintext.Unchecked += (_, _) => UpdateRecovery();
+        signed.Checked += (_, _) => { signerFields.Visibility = Visibility.Visible; UpdateRecovery(); };
+        signed.Unchecked += (_, _) => { signerFields.Visibility = Visibility.Collapsed; UpdateRecovery(); };
+        scan.Checked += (_, _) => { scanFields.Visibility = Visibility.Visible; UpdateRecovery(); };
+        scan.Unchecked += (_, _) => { scanFields.Visibility = Visibility.Collapsed; UpdateRecovery(); };
+        signature.TextChanged += (_, _) => UpdateRecovery();
+        expectedPublic.TextChanged += (_, _) => UpdateRecovery();
+        scanner.TextChanged += (_, _) => UpdateRecovery();
         var page = new StackPanel();
         var first = Card(source); first.Margin = new Thickness(0, 0, 0, 16);
         page.Children.Add(first);
@@ -103,6 +128,10 @@ internal sealed class RescueWindow : Shell
             credential.SelectedIndex = 0;
             ((ComboBoxItem)credential.Items[1]).IsEnabled = false;
             restore!.IsEnabled = false;
+            signed.IsChecked = false;
+            signed.IsEnabled = false;
+            expectedPublic.Clear(); signature.Clear();
+            checks.Text = "Absender nicht geprüft · Kein Malware-Scan angefordert";
             save.IsEnabled = false;
             again.IsEnabled = true;
             format.Text = "Datei wird gelesen …";
@@ -125,6 +154,7 @@ internal sealed class RescueWindow : Shell
                     }));
                     report = reply.Text;
                     selectedFormat = result.Format;
+                    signed.IsEnabled = result.Format is "container_v1" or "embedded_container_v1";
                     ((ComboBoxItem)credential.Items[1]).IsEnabled = result.Format == "vault_v2";
                     save.IsEnabled = true;
                 });
@@ -152,6 +182,8 @@ internal sealed class RescueWindow : Shell
     {
         using var password = secret.SecurePassword;
         restore.IsEnabled = RecoverySupported && password.Length > 0 && plaintext.IsChecked == true && destination.Text.Length > 0;
+        if (signed.IsChecked == true && (signature.Text.Length == 0 || expectedPublic.Text.Length == 0)) restore.IsEnabled = false;
+        if (scan.IsChecked == true && scanner.Text.Length == 0) restore.IsEnabled = false;
     }
 
     private void ChooseDestination()
@@ -177,13 +209,20 @@ internal sealed class RescueWindow : Shell
         string format = selectedFormat!;
         string output = destination.Text;
         string route = (string)((ComboBoxItem)credential.SelectedItem).Tag;
+        bool verifySender = signed.IsChecked == true;
+        bool scanRequested = scan.IsChecked == true;
         byte[] password = Engine.TakePassword(secret);
         state.Text = "Zugang und vollständige Daten werden geprüft …";
         state.Foreground = Brush("Muted");
         try
         {
             bool ok = await Run("Datei wird authentifiziert und in ein neues Ziel exportiert …", token =>
-                Engine.Call(new { action = "recover", input = source, output, credential = route, confirm_plaintext = true }, password, cancellation: token), reply =>
+                {
+                    var options = new { signature = verifySender ? FullPath(signature) : null,
+                        expected_public = verifySender ? Required(expectedPublic) : null,
+                        scanner = scanRequested ? FullPath(scanner) : null };
+                    return Engine.Call(new { action = "recover", input = source, output, credential = route, confirm_plaintext = true, options }, password, cancellation: token);
+                }, reply =>
                 {
                     using var summary = JsonDocument.Parse(reply.Text ?? "");
                     var data = summary.RootElement;
@@ -191,9 +230,15 @@ internal sealed class RescueWindow : Shell
                         || data.GetProperty("format").GetString() != format) throw new JsonException();
                     state.Text = $"Authentifiziert · {data.GetProperty("entries").GetInt32():N0} Einträge exportiert";
                     state.Foreground = Brush("Mint");
+                    string signatureResult = data.GetProperty("signature").GetString() ?? "";
+                    string scanResult = data.GetProperty("malware_scan").GetString() ?? "";
+                    if (signatureResult != (verifySender ? "verified_expected_key" : "not_checked")
+                        || scanResult != (scanRequested ? "completed_no_detection" : "not_requested")) throw new JsonException();
+                    checks.Text = "Letzter Export: " + (verifySender ? "Signatur entspricht gewähltem Schlüssel" : "Absender nicht geprüft")
+                        + " · " + (scanRequested ? "Malware-Scan abgeschlossen, keine Erkennung" : "Kein Malware-Scan angefordert");
                     SetStatus("Fertig. Die Ausgabe ist unverschlüsselt; die Originaldatei ist unverändert.");
                 });
-            if (!ok) { state.Text = "Kein erfolgreicher authentifizierter Export."; state.Foreground = Brush("Problem"); }
+            if (!ok) { state.Text = "Kein erfolgreicher authentifizierter Export."; state.Foreground = Brush("Problem"); checks.Text = "Angeforderte Prüfungen nicht erfolgreich abgeschlossen."; }
         }
         finally { CryptographicOperations.ZeroMemory(password); UpdateRecovery(); }
     }

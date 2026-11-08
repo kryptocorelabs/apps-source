@@ -4,7 +4,9 @@
 mod formats;
 pub use formats::{CredentialRoute, Format};
 mod recovery;
-pub use recovery::{recover, RecoveryError, RecoverySummary};
+pub use recovery::{
+    recover, recover_with_options, RecoveryError, RecoveryOptions, RecoverySummary,
+};
 
 use serde::Serialize;
 use std::{

@@ -53,7 +53,3 @@ The apps invoke a local Rust worker without a console. Passwords and
 messages are sent through a private process pipe, separate from arguments
 and diagnostics. The same Rust libraries implement the CLI and GUI
 operations and read the same on-disk formats.
-
-## Rescue
-
-Build `./apps/rescue/build-windows.ps1`. See [Rescue](../rescue/README.md) for supported formats and plaintext export warnings.

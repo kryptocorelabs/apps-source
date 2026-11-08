@@ -43,6 +43,7 @@ enum Request {
         input: PathBuf,
         output: PathBuf,
         signer: Option<Signer>,
+        native_signer: Option<NativeSigner>,
         scanner: Option<PathBuf>,
         #[serde(default)]
         embedded: bool,
@@ -56,6 +57,21 @@ enum Request {
     Verify {
         input: PathBuf,
         signer: Signer,
+    },
+    NewSigningKey {
+        output: PathBuf,
+    },
+    SigningPublic {
+        key: PathBuf,
+    },
+    NativeSign {
+        input: PathBuf,
+        key: PathBuf,
+        output: PathBuf,
+    },
+    NativeVerify {
+        input: PathBuf,
+        signer: NativeSigner,
     },
     NewIdentity {
         path: PathBuf,
@@ -173,6 +189,19 @@ struct Signer {
     allowed: PathBuf,
     principal: String,
     signature: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeSigner {
+    signature: PathBuf,
+    expected_public: String,
+}
+impl NativeSigner {
+    fn verification(&self) -> Result<container::native_signature::Verification, String> {
+        container::native_signature::Verification::from_file(&self.signature, &self.expected_public)
+            .map_err(container_error)
+    }
 }
 
 impl Signer {
@@ -635,37 +664,66 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             input,
             output,
             signer,
+            native_signer,
             scanner,
             embedded,
         } => {
-            let inspect = |root: &Path| container::scanner::inspect(root, scanner.as_deref());
-            let (result, label) = if embedded {
-                if signer.is_some() {
-                    return Err("Prüfe die Signatur der EXE vor dem Start.".into());
-                }
-                (
-                    container::unpack_executable_with_inspection(&input, &output, first, inspect),
-                    "Container entpackt",
-                )
-            } else if let Some(signer) = signer {
-                let verification = signer.verification()?;
-                (
-                    container::unpack_signed_with_inspection(
-                        &input,
-                        &output,
-                        first,
-                        &verification,
-                        inspect,
-                    ),
-                    "Entpackt · Absender bestätigt",
-                )
+            let native = native_signer
+                .as_ref()
+                .map(NativeSigner::verification)
+                .transpose()?;
+            let legacy = signer.as_ref().map(Signer::verification).transpose()?;
+            let result = container::unpack_protected(
+                &input,
+                &output,
+                first,
+                container::OpenPolicy {
+                    embedded,
+                    native: native.as_ref(),
+                    openssh: legacy.as_ref(),
+                    scanner: scanner.as_deref(),
+                },
+            );
+            let label = if native.is_some() || legacy.is_some() {
+                "Entpackt; ausgewählter Signierschlüssel bestätigt"
             } else {
-                (
-                    container::unpack_with_inspection(&input, &output, first, inspect),
-                    "Container entpackt",
-                )
+                "Entpackt; Absender nicht geprüft"
             };
-            Ok(result_summary(label, result.map_err(container_error)?))
+            let mut outcome = result_summary(label, result.map_err(container_error)?);
+            outcome.message.push_str(if scanner.is_some() {
+                " · Malware-Scan abgeschlossen, keine Erkennung"
+            } else {
+                " · Kein Malware-Scan angefordert"
+            });
+            Ok(outcome)
+        }
+        Request::NewSigningKey { output } => {
+            confirm(first, second)?;
+            let public = container::native_signature::generate_key(&output, first)
+                .map_err(container_error)?;
+            Ok(Outcome::text("Passwortgeschützter Signierschlüssel angelegt. Öffentlichen Code separat abgleichen.",Zeroizing::new(public)))
+        }
+        Request::SigningPublic { key } => {
+            let public =
+                container::native_signature::export_public(&key, first).map_err(container_error)?;
+            Ok(Outcome::text(
+                "Öffentlicher Signiercode. Diesen Code über einen vertrauenswürdigen Kanal teilen.",
+                Zeroizing::new(public),
+            ))
+        }
+        Request::NativeSign { input, key, output } => {
+            container::native_signature::sign(&input, &key, first, &output)
+                .map_err(container_error)?;
+            Ok(Outcome::message(
+                "KryptoCore-Signatur gespeichert. Sie bestätigt keine Virenfreiheit.",
+            ))
+        }
+        Request::NativeVerify { input, signer } => {
+            signer
+                .verification()?
+                .verify(&input)
+                .map_err(container_error)?;
+            Ok(Outcome::message("Dateisignatur entspricht dem gewählten öffentlichen Schlüssel. Kein Virenscan durchgeführt."))
         }
         Request::Sign {
             input,

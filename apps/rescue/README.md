@@ -3,7 +3,7 @@
 Offline file inspection and authenticated recovery exports. Built on the
 open-source [KryptoCore](https://github.com/kryptocorelabs/kryptocore) library.
 
-**Preview 0.1.0-preview.2.** Use working copies and retain independent backups.
+**Preview 0.1.0-preview.3.** Use working copies and retain independent backups.
 The Windows executable is unsigned and has not received an independent audit.
 
 ## What works
@@ -18,12 +18,13 @@ The Windows executable is unsigned and has not received an independent audit.
 
 A recognized marker is not authentication. Successful recovery verifies the
 encrypted contents with the selected format reader. It does not verify a
-human sender, check an OpenSSH signature, scan for malware or make files safe
-to execute. Unknown formats and unsupported versions are rejected.
+human identity or make files safe to execute. Optional shared sender-signature
+checks and local ClamAV scanning are separate choices; OpenSSH verification
+is still handled by Container. Unknown formats and unsupported versions are rejected.
 
 ## Windows quick start
 
-1. Download and extract the [preview ZIP](https://github.com/kryptocorelabs/rescue/releases/tag/v0.1.0-preview.2).
+1. Download and extract the [preview ZIP](https://github.com/kryptocorelabs/rescue/releases/tag/v0.1.0-preview.3).
 2. Run **KryptoCore-Rescue.exe**. No separate Python or .NET installation is needed.
 3. Choose **Datei auswählen …** and check the recognized format.
 4. Select **Passwort** or **Wiederherstellungsschlüssel** where supported and enter the existing credential.
@@ -48,4 +49,18 @@ See [architecture and limits](ARCHITECTURE.md), [security](SECURITY.md),
 This repository hosts public documentation and downloads; application source
 is maintained in the private application workspace. KryptoCore and its optional
 [signature companion](https://github.com/kryptocorelabs/kryptocore/tree/main/modules/signatures)
-remain open source. This app does not yet use the signature companion.
+remain open source. Rescue uses the signature companion through the shared KCC reader.
+
+## Sender and malware checks
+
+Under **Absender & Malware-Prüfung**, choose a `.kcsig` and independently
+confirm the expected `KCP1:` public code. Keys/signatures are created in
+Container. Only Container inputs support this sender protocol; Vault
+records retain their existing password/recovery authentication.
+
+A trusted local ClamAV executable can scan authenticated plaintext before
+output is published, including Vault JSON. Detection, errors, missing tools
+or exceeded bounds block output. Keep its database current. The adapter
+is tested with controlled scanner processes; real ClamAV detection quality
+is not measured by those tests. See [signature protocol](SIGNATURES.md) and
+[malware limits](MALWARE-PROTECTION.md). No file is automatically executed.

@@ -41,6 +41,7 @@ internal sealed class ContainerWindow : Shell
             Tab("Start", HomeView());
             showCreate = Tab("Verschlüsseln", create);
             showOpen = Tab("Öffnen", open);
+            Tab("Signaturen", NativeSignatureView());
             Tab("Erweitert", SignatureView());
         }
         SourceInitialized += (_, _) => EnableBackdrop();
@@ -380,6 +381,11 @@ internal sealed class ContainerWindow : Shell
         var signerPanel = new StackPanel { Visibility = Visibility.Collapsed };
         var scannerPanel = new StackPanel { Visibility = Visibility.Collapsed };
         var signer = new SignerFields(this, signerPanel);
+        var nativeSigned = new CheckBox { Content = "KryptoCore-Absendersignatur prüfen (.kcsig)" };
+        var nativePanel = new StackPanel { Visibility = Visibility.Collapsed };
+        var nativeSignature = PathField(nativePanel, "KryptoCore-Signaturdatei", "KryptoCore-Signatur (*.kcsig)|*.kcsig");
+        var expectedPublic = Field(nativePanel, "Separat bestätigter öffentlicher Code (KCP1:…)", new TextBox());
+        nativePanel.Children.Add(Text("Den öffentlichen Code unabhängig beim Absender bestätigen. Eine gültige Signatur bestätigt keine Virenfreiheit.", 12, true));
         var scanner = PathField(scannerPanel, "ClamAV-Programm (clamscan.exe)", Tools);
         var openFolder = Button("Entpackte Dateien anzeigen", () => OpenFolder(extracted));
         openFolder.Visibility = Visibility.Collapsed;
@@ -393,6 +399,7 @@ internal sealed class ContainerWindow : Shell
                 {
                     action = "unpack", input = selected, output = destination, embedded = embedded is not null,
                     signer = signed.IsChecked == true ? signer.Value() : null,
+                    native_signer = nativeSigned.IsChecked == true ? new { signature = FullPath(nativeSignature), expected_public = Required(expectedPublic) } : null,
                     scanner = scan.IsChecked == true ? FullPath(scanner) : null
                 }, password), _ =>
                 {
@@ -414,6 +421,9 @@ internal sealed class ContainerWindow : Shell
         right.Children.Add(Row(unpack, openFolder));
 
         Toggle(signed, signerPanel);
+        Toggle(nativeSigned, nativePanel);
+        nativeSigned.Checked += (_, _) => signed.IsChecked = false;
+        signed.Checked += (_, _) => nativeSigned.IsChecked = false;
         Toggle(scan, scannerPanel);
         var check = Button("Nur Datei prüfen", async () =>
         {
@@ -423,6 +433,12 @@ internal sealed class ContainerWindow : Shell
                 Engine.WithPassword(new { action = "check", input = selected, embedded = embedded is not null }, password));
         });
         options.Children.Add(Row(check));
+        if (embedded is null)
+        {
+            options.Children.Add(nativeSigned);
+            options.Children.Add(nativePanel);
+        }
+        else options.Children.Add(Text("Diese EXE läuft bereits. Prüfe EXE-Signaturen vor dem Start in einer separaten vertrauenswürdigen App, etwa Rescue.", 12, true));
         if (embedded is null)
         {
             options.Children.Add(signed);
@@ -585,6 +601,44 @@ internal sealed class ContainerWindow : Shell
     {
         string stem = Path.GetFileNameWithoutExtension(name);
         return string.IsNullOrWhiteSpace(stem) ? "Container" : stem;
+    }
+
+    private FrameworkElement NativeSignatureView()
+    {
+        const string KeyFiles = "Geschützter Signierschlüssel (*.kcsk)|*.kcsk";
+        const string NativeSignatures = "KryptoCore-Signatur (*.kcsig)|*.kcsig";
+        const string SignedFiles = "Container und Windows-Export|*.kcc;*.exe|Alle Dateien|*.*";
+        var page = new StackPanel();
+        var create = Section("Eigener Signierschlüssel", "Einmal anlegen. Das Schlüsselpasswort bleibt unabhängig von der Container-Passphrase.");
+        var newKey = PathField(create, "Neuer geschützter Schlüssel", KeyFiles, ".kcsk");
+        var password = Field(create, "Neues Schlüsselpasswort (mindestens 15 Zeichen)", new PasswordBox());
+        var repeat = Field(create, "Schlüsselpasswort wiederholen", new PasswordBox());
+        var publicCode = Field(create, "Öffentlicher Signiercode zum Weitergeben", new TextBox { IsReadOnly = true, IsUndoEnabled = false });
+        create.Children.Add(Button("Signierschlüssel anlegen", async () => await Run("Signierschlüssel wird geschützt gespeichert …", _ =>
+            Engine.WithPassword(new { action = "new_signing_key", output = FullPath(newKey) }, password, repeat), reply => publicCode.Text = reply.Text ?? ""), true));
+        create.Children.Add(Text("Nur die .kcsk-Datei und ihr Passwort erlauben das Signieren. Sichere sie getrennt. Den öffentlichen KCP1-Code über einen vertrauenswürdigen Kanal teilen.", 12, true));
+        var keyCard = Card(create); keyCard.Margin = new Thickness(0, 0, 0, 16); page.Children.Add(keyCard);
+
+        var signing = Section("Container signieren", "Die Signatur bindet die exakten verschlüsselten Dateibytes. Das Containerformat bleibt unverändert.");
+        var input = PathField(signing, "Container für KryptoCore-Signatur", SignedFiles);
+        var key = PathField(signing, "Geschützter Signierschlüssel", KeyFiles);
+        var unlock = Field(signing, "Schlüsselpasswort", new PasswordBox());
+        var output = PathField(signing, "Neue KryptoCore-Signatur", NativeSignatures, ".kcsig");
+        signing.Children.Add(Row(Button("Signatur erstellen", async () => await Run("Dateisignatur wird erstellt …", _ =>
+            Engine.WithPassword(new { action = "native_sign", input = FullPath(input), key = FullPath(key), output = FullPath(output) }, unlock)), true),
+            Button("Öffentlichen Code anzeigen", async () => await Run("Öffentlicher Signiercode wird geladen …", _ =>
+                Engine.WithPassword(new { action = "signing_public", key = FullPath(key) }, unlock), reply => publicCode.Text = reply.Text ?? ""))));
+        var signCard = Card(signing); signCard.Margin = new Thickness(0, 0, 0, 16); page.Children.Add(signCard);
+
+        var checking = Section("Empfangene Signatur prüfen", "Prüfe den erwarteten öffentlichen Code separat beim Absender. Eine Signatur ersetzt keinen Malware-Scan.");
+        var received = PathField(checking, "Signierten Container prüfen", SignedFiles);
+        var signature = PathField(checking, "Empfangene KryptoCore-Signatur", NativeSignatures);
+        var expected = Field(checking, "Vertrauenswürdig bestätigter öffentlicher Code", new TextBox());
+        checking.Children.Add(Button("KryptoCore-Signatur prüfen", async () => await Run("Signatur wird geprüft …", _ =>
+            Engine.Call(new { action = "native_verify", input = FullPath(received), signer = new { signature = FullPath(signature), expected_public = Required(expected) } })), true));
+        checking.Children.Add(Text("Beim Entpacken kannst du dieselbe Prüfung unter Erweiterte Optionen auswählen. Eine alleinige Prüfung hier bindet keinen später erneut geöffneten Dateistand.", 12, true));
+        page.Children.Add(Card(checking));
+        return page;
     }
 
     private FrameworkElement SignatureView()

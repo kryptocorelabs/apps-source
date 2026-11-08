@@ -13,6 +13,7 @@ use std::{
 use tempfile::{Builder, NamedTempFile};
 use zeroize::Zeroizing;
 
+pub mod native_signature;
 pub mod scanner;
 pub mod signature;
 #[cfg(test)]
@@ -452,6 +453,15 @@ fn read_payload(
     passphrase: &[u8],
     destination: Option<&Path>,
 ) -> Result<Summary> {
+    read_payload_limited(reader, passphrase, destination, MAX_BYTES)
+}
+
+fn read_payload_limited(
+    reader: &mut impl Read,
+    passphrase: &[u8],
+    destination: Option<&Path>,
+    limit: u64,
+) -> Result<Summary> {
     let mut cipher = begin_read(reader, passphrase)?;
     let mut entries = Entries::default();
     loop {
@@ -486,6 +496,11 @@ fn read_payload(
         let name =
             std::str::from_utf8(&record[9..]).map_err(|_| invalid("Entry names must be UTF-8."))?;
         entries.add(name, directory, size)?;
+        if entries.summary.bytes > limit {
+            return Err(invalid(
+                "Extraction exceeds the selected plaintext/scan byte limit.",
+            ));
+        }
         let path = destination.map(|root| root.join(name));
         if directory {
             if let Some(path) = path {
@@ -604,6 +619,84 @@ pub fn unpack_signed_with_inspection(
         signature.verify_digest(&reader.finish())?;
         Ok(result)
     })
+}
+
+/// Verify the shared signature protocol against the exact stream being
+/// decrypted, before the inspection callback or any destination publication.
+pub fn unpack_native_with_inspection(
+    input: &Path,
+    output: &Path,
+    passphrase: &[u8],
+    verification: &native_signature::Verification,
+    inspect: impl FnOnce(&Path) -> Result<()>,
+) -> Result<Summary> {
+    unpack_impl(output, inspect, |stage| {
+        native_signature::read_authenticated(input, passphrase, stage, verification)
+    })
+}
+
+/// Requested checks run before any extraction is published.
+#[derive(Default)]
+pub struct OpenPolicy<'a> {
+    pub embedded: bool,
+    pub native: Option<&'a native_signature::Verification>,
+    pub openssh: Option<&'a signature::Verification<'a>>,
+    pub scanner: Option<&'a Path>,
+}
+
+pub fn unpack_protected(
+    input: &Path,
+    output: &Path,
+    password: &[u8],
+    policy: OpenPolicy<'_>,
+) -> Result<Summary> {
+    if policy.native.is_some() && policy.openssh.is_some() {
+        return Err(invalid("Select one sender-signature protocol."));
+    }
+    if policy.embedded && policy.openssh.is_some() {
+        return Err(invalid(
+            "Check an executable OpenSSH signature in a trusted separate app before starting it.",
+        ));
+    }
+    let limit = if policy.scanner.is_some() {
+        scanner::MAX_TOTAL_BYTES
+    } else {
+        MAX_BYTES
+    };
+    unpack_impl(
+        output,
+        |stage| scanner::inspect(stage, policy.scanner),
+        |stage| {
+            if let Some(verification) = policy.native {
+                native_signature::read_authenticated_limited(
+                    input,
+                    password,
+                    stage,
+                    verification,
+                    limit,
+                )
+            } else if let Some(verification) = policy.openssh {
+                let mut reader = signature::HashReader::new(BufReader::new(open_container(input)?));
+                let result = read_payload_limited(&mut reader, password, Some(stage), limit)?;
+                verification.verify_digest(&reader.finish())?;
+                Ok(result)
+            } else if policy.embedded {
+                read_payload_limited(
+                    &mut BufReader::new(open_executable_payload(input)?),
+                    password,
+                    Some(stage),
+                    limit,
+                )
+            } else {
+                read_payload_limited(
+                    &mut BufReader::new(open_container(input)?),
+                    password,
+                    Some(stage),
+                    limit,
+                )
+            }
+        },
+    )
 }
 
 fn unpack_impl(

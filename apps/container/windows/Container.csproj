@@ -2,7 +2,7 @@
   <Import Project="../../desktop/windows/Desktop.props" />
   <PropertyGroup>
     <AssemblyName>KryptoCore-Container</AssemblyName>
-    <Version>0.1.0-alpha.1</Version>
+    <Version>0.1.0-alpha.2-preview.1</Version>
     <ApplicationIcon>Assets/container.ico</ApplicationIcon>
     <DefineConstants>$(DefineConstants);CONTAINER_APP</DefineConstants>
   </PropertyGroup>

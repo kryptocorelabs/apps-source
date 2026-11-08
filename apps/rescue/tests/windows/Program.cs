@@ -13,6 +13,7 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (ScannerProbe.TryRun(args)) return;
         var app = new Application();
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
@@ -80,6 +81,57 @@ internal static class Program
             if (!File.Exists(recovered) || !File.ReadAllText(recovered).Contains("test secret")
                 || !Text("Authentifiziert · 1 Einträge exportiert") || !File.ReadAllBytes(vault).SequenceEqual(encrypted))
                 throw new Exception("Authenticated Vault export failed or changed source");
+            var scan = (CheckBox)type.GetField("scan", Fields)!.GetValue(window)!;
+            var scanner = (TextBox)type.GetField("scanner", Fields)!.GetValue(window)!;
+            scan.IsChecked = true;
+            scanner.Text = Path.Combine(AppContext.BaseDirectory, "Check.exe");
+            foreach (int status in new[] { 1, 2, 0 })
+            {
+                string target = Path.Combine(root.FullName, "vault-scan-" + status + ".json");
+                Environment.SetEnvironmentVariable("KCV_TEST_SCAN_EXIT", status.ToString());
+                destination.Text = target; secret.Password = "synthetic rescue fixture password";
+                ClickRestore();
+                if (File.Exists(target) != (status == 0) || !File.ReadAllBytes(vault).SequenceEqual(encrypted))
+                    throw new Exception("Vault scan detection/error gate or source preservation failed");
+            }
+            scanner.Text = "relative-scanner.exe";
+            secret.Password = "synthetic rescue fixture password";
+            destination.Text = Path.Combine(root.FullName, "relative-must-not-exist.json");
+            ClickRestore();
+            if (File.Exists(destination.Text)) throw new Exception("Relative scanner path accepted");
+            scanner.Text = Path.Combine(AppContext.BaseDirectory, "Check.exe");
+            if (args.Length > 1)
+            {
+                using var native = JsonDocument.Parse(File.ReadAllText(args[1]));
+                string archive = native.RootElement.GetProperty("archive").GetString()!;
+                string signaturePath = native.RootElement.GetProperty("signature").GetString()!;
+                string publicCode = native.RootElement.GetProperty("expected_public").GetString()!;
+                string password = native.RootElement.GetProperty("password").GetString()!;
+                Inspect(archive);
+                var signed = (CheckBox)type.GetField("signed", Fields)!.GetValue(window)!;
+                var signature = (TextBox)type.GetField("signature", Fields)!.GetValue(window)!;
+                var expected = (TextBox)type.GetField("expectedPublic", Fields)!.GetValue(window)!;
+                signed.IsChecked = true; signature.Text = signaturePath; expected.Text = publicCode;
+                consent.IsChecked = true;
+                Environment.SetEnvironmentVariable("KCV_TEST_SCAN_EXIT", "0");
+                destination.Text = Path.Combine(root.FullName, "verified-container"); secret.Password = password;
+                ClickRestore();
+                if (!File.Exists(Path.Combine(destination.Text, "synthetic.txt"))) throw new Exception("Container-to-Rescue signed export failed");
+                var results = (TextBlock)type.GetField("checks", Fields)!.GetValue(window)!;
+                if (!results.Text.Contains("Signatur entspricht") || !results.Text.Contains("keine Erkennung"))
+                    throw new Exception("Signature/scan status missing or conflated");
+                byte[] originalSignature = File.ReadAllBytes(signaturePath);
+                try
+                {
+                    byte[] bad = (byte[])originalSignature.Clone(); bad[^1] ^= 1; File.WriteAllBytes(signaturePath, bad);
+                    string marker = Path.Combine(root.FullName, "invalid-signature-must-not-scan.txt");
+                    Environment.SetEnvironmentVariable("KCV_TEST_SCAN_MARKER", marker);
+                    destination.Text = Path.Combine(root.FullName, "invalid-signed-container"); secret.Password = password;
+                    ClickRestore();
+                    if (Directory.Exists(destination.Text) || File.Exists(marker)) throw new Exception("Invalid signature reached scan/publication in Rescue");
+                }
+                finally { File.WriteAllBytes(signaturePath, originalSignature); }
+            }
             secret.Password = "synthetic rescue fixture password";
             Inspect(source);
             if (secret.SecurePassword.Length != 0 || destination.Text.Length != 0 || consent.IsChecked == true || restore.IsEnabled)
@@ -94,9 +146,9 @@ internal static class Program
             Inspect(broken);
             if (Button("Diagnosebericht speichern …").IsEnabled || type.GetField("report", Fields)!.GetValue(window) is not null)
                 throw new Exception("Failed probe kept a stale report enabled");
-            Console.WriteLine("Rescue Windows passed: marker-only display, authenticated export, wrong password rejection, plaintext consent, input clearing, source preservation, path-free report, no overwrite, report cancellation cleanup and stale-state reset.");
+            Console.WriteLine("Rescue Windows passed: authenticated exports, signature integration when fixture supplied, controlled scan detection/error/no-detection gates, invalid tool rejection, credential clearing, source preservation, path-free reports and no overwrite. Scanner tests do not measure real malware detection.");
         }
-        finally { window.Close(); }
+        finally { Environment.SetEnvironmentVariable("KCV_TEST_SCAN_EXIT", null); Environment.SetEnvironmentVariable("KCV_TEST_SCAN_MARKER", null); window.Close(); }
 
         Button Button(string name) => Elements(window).OfType<Button>().Single(button => Equals(button.Content, name));
         bool Text(string text) => Elements(window).OfType<TextBlock>().Any(block => block.Text == text);

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use kryptocore_container::{
-    check, generate_passphrase, pack, scanner::inspect, signature, unpack_signed_with_inspection,
-    unpack_with_inspection, Error, Summary,
+    check, generate_passphrase, native_signature, pack, signature, unpack_protected, Error,
+    OpenPolicy, Summary,
 };
 use std::{
     ffi::OsString,
@@ -19,6 +19,11 @@ const USAGE: &str = "KryptoCore Container (alpha)
   kryptocore-container unpack-signed <in.kcc> <new-folder> <ssh-keygen> <allowed-signers> <principal> <signature> [--scan <absolute-clamscan-path>]
   kryptocore-container sign <in.kcc> <ssh-keygen> <private-key> <out.sig>
   kryptocore-container verify <in.kcc> <ssh-keygen> <allowed-signers> <principal> <signature>
+  kryptocore-container keygen <new.kcsk>
+  kryptocore-container key-public <key.kcsk>
+  kryptocore-container sign-native <in.kcc-or-exe> <key.kcsk> <new.kcsig>
+  kryptocore-container verify-native <in.kcc-or-exe> <expected-KCP1-code> <signature.kcsig>
+  kryptocore-container unpack-native <in.kcc-or-exe> <new-folder> <expected-KCP1-code> <signature.kcsig> [--scan <absolute-clamscan-path>]
   kryptocore-container generate-passphrase";
 
 fn main() -> std::process::ExitCode {
@@ -193,6 +198,68 @@ fn run(args: &[OsString]) -> Result<(), Error> {
                 pack(Path::new(output), &sources, first.as_bytes())?,
             );
         }
+        (Some("keygen"), [output]) => {
+            let first = password("New signing-key password: ")?;
+            let second = password("Repeat signing-key password: ")?;
+            if *first != *second {
+                return Err(Error::Format("Signing-key passwords do not match."));
+            }
+            println!(
+                "{}",
+                native_signature::generate_key(Path::new(output), first.as_bytes())?
+            );
+        }
+        (Some("key-public"), [key]) => {
+            let password = password("Signing-key password: ")?;
+            println!(
+                "{}",
+                native_signature::export_public(Path::new(key), password.as_bytes())?
+            );
+        }
+        (Some("sign-native"), [input, key, output]) => {
+            let password = password("Signing-key password: ")?;
+            native_signature::sign(
+                Path::new(input),
+                Path::new(key),
+                password.as_bytes(),
+                Path::new(output),
+            )?;
+            println!("Signature saved. This does not certify malware absence.");
+        }
+        (Some("verify-native"), [input, expected, signature]) => {
+            let expected = expected.to_str().ok_or(Error::SignatureRejected)?;
+            native_signature::Verification::from_file(Path::new(signature), expected)?
+                .verify(Path::new(input))?;
+            println!("Signature matches the selected expected key. No malware scan performed.");
+        }
+        (Some("unpack-native"), [input, output, expected, signature, options @ ..]) => {
+            let expected = expected.to_str().ok_or(Error::SignatureRejected)?;
+            let verifier =
+                native_signature::Verification::from_file(Path::new(signature), expected)?;
+            let scanner = scan_tool(options)?;
+            let password = password("Container passphrase: ")?;
+            summary(
+                "Authenticated and signature verified",
+                unpack_protected(
+                    Path::new(input),
+                    Path::new(output),
+                    password.as_bytes(),
+                    OpenPolicy {
+                        native: Some(&verifier),
+                        scanner,
+                        ..OpenPolicy::default()
+                    },
+                )?,
+            );
+            println!(
+                "{}",
+                if scanner.is_some() {
+                    "Malware scan completed: no detection."
+                } else {
+                    "Malware scan not requested."
+                }
+            );
+        }
         (Some("check"), [input]) => {
             let key = password("Container passphrase: ")?;
             summary("Authenticated", check(Path::new(input), key.as_bytes())?);
@@ -215,11 +282,14 @@ fn run(args: &[OsString]) -> Result<(), Error> {
             let key = password("Container passphrase: ")?;
             summary(
                 "Extracted",
-                unpack_with_inspection(
+                unpack_protected(
                     Path::new(input),
                     Path::new(output),
                     key.as_bytes(),
-                    |root| inspect(root, scanner),
+                    OpenPolicy {
+                        scanner,
+                        ..OpenPolicy::default()
+                    },
                 )?,
             );
         }
@@ -230,12 +300,15 @@ fn run(args: &[OsString]) -> Result<(), Error> {
             let key = password("Container passphrase: ")?;
             summary(
                 "Verified and extracted",
-                unpack_signed_with_inspection(
+                unpack_protected(
                     Path::new(input),
                     Path::new(output),
                     key.as_bytes(),
-                    &signer,
-                    |root| inspect(root, scanner),
+                    OpenPolicy {
+                        openssh: Some(&signer),
+                        scanner,
+                        ..OpenPolicy::default()
+                    },
                 )?,
             );
         }

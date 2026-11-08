@@ -6,5 +6,6 @@
 *.kcmi.*
 *.kcc
 *.kcv
+*.kcsk
 *.exe
 __pycache__/

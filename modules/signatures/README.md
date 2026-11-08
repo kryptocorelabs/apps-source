@@ -1,7 +1,8 @@
 # KryptoCore Signatures
 
 Optional Rust companion crate, `0.1.0-preview.1`. MIT licensed. The encryption
-Core does not depend on this crate. No application currently calls this API.
+Core does not depend on this crate. Container and Rescue use this API through
+the application-owned [KCC signature protocol](https://github.com/kryptocorelabs/container/blob/main/SIGNATURES.md).
 Existing Vault files, MSG identities/pairings and Container OpenSSH signatures
 retain their existing formats and verification paths.
 

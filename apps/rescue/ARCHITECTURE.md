@@ -1,6 +1,6 @@
 # Rescue architecture and limits
 
-## Implemented in 0.1.0-preview.2
+## Implemented in 0.1.0-preview.3
 
 An independent WPF Windows client embeds an offline Rust worker. It starts
 no main application, Tor process, account service or browser pairing.
@@ -17,7 +17,12 @@ flushed, then published with `persist_noclobber`. Container recovery reuses
 the application's existing authenticated stream reader and staged extractor,
 including final-tag, path, collision, link and resource-limit checks.
 Executable containers are bounded payload wrappers, never launched programs.
-Sender-signature checks and malware scans are separate and not performed here.
+The optional KCCS v1 sender check uses the shared signature companion and
+hashes the exact stream being decrypted. The independent ClamAV scan runs
+only after content/signature authentication and before publication.
+A selected KCC scan bounds plaintext to 400 MiB before oversized entries
+are written. Vault scans run on the authenticated staged JSON.
+See SIGNATURES.md and MALWARE-PROTECTION.md for complete boundaries.
 
 Input leaves and output ancestors reject links/reparse points. This is not
 an immutable snapshot or protection against a hostile local operating system.
@@ -56,7 +61,10 @@ are rejected. A recovery request must explicitly confirm plaintext output:
 ```
 
 No credential belongs in that JSON. One reply reports success/failure and,
-on recovery success, authenticated format, entry count and byte count only.
+on recovery success, authenticated format, entry/byte counts and separate
+signature/malware-scan states. Optional `options` contains `signature`,
+`expected_public` and `scanner`; absent options retain the previous behavior.
+Requested incomplete or failed protection options are never silently ignored.
 Errors use fixed messages rather than echoing paths or input data.
 
 ## Remaining work
