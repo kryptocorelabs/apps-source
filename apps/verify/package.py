@@ -28,7 +28,7 @@ for name in ('README.md', 'PROTOCOL.md', 'THIRD_PARTY_NOTICES.md'):
 shutil.copytree(Path(__file__).parent / 'third-party', stage / 'third-party')
 archive = output / (stage.name + ('.zip' if system == 'windows' else '.tar.gz'))
 if system == 'windows':
-    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as package:
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as package:
         for file in stage.rglob('*'):
             if file.is_file():
                 package.write(file, stage.name + '/' + file.relative_to(stage).as_posix())
