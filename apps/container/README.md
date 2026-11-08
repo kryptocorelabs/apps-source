@@ -97,6 +97,12 @@ memory per data chunk. This is a format limit, not a performance claim. Names
 are encrypted; file structure and sizes can be inferred from frame sizes.
 See [format and security boundaries](FORMAT.md).
 
+Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
+and through automated CI. No independent security audit has been completed.
+We welcome community testing, code reviews and scrutiny of our security
+assumptions. Please use synthetic data and report suspected vulnerabilities
+privately through the project's security-reporting channel.
+
 ## Shared sender-signature preview
 
 Version 0.1.0-alpha.2-preview.1 adds the **Signaturen** tab for protected

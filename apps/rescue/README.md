@@ -6,6 +6,12 @@ open-source [KryptoCore](https://github.com/kryptocorelabs/kryptocore) library.
 **Preview 0.1.0-preview.3.** Use working copies and retain independent backups.
 The Windows executable is unsigned and has not received an independent audit.
 
+Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
+and through automated CI. No independent security audit has been completed.
+We welcome community testing, code reviews and scrutiny of our security
+assumptions. Please use synthetic data and report suspected vulnerabilities
+privately through the project's security-reporting channel.
+
 ## What works
 
 | File | Available operation | Required access |

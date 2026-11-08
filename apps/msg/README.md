@@ -10,6 +10,12 @@ beside the conversation and a fixed message composer. Use **+** beside the
 composer to attach a file. Profile and connection options remain available
 in the navigation rail.
 
+Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
+and through automated CI. No independent security audit has been completed.
+We welcome community testing, code reviews and scrutiny of our security
+assumptions. Please use synthetic data and report suspected vulnerabilities
+privately through the project's security-reporting channel.
+
 ## Start a conversation
 
 1. Open or create an identity under **Mein Profil**. Enter your passphrase
