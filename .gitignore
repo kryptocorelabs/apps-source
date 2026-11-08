@@ -13,3 +13,13 @@ __pycache__/
 /apps/desktop/tests/appearance/bin/
 
 /apps/desktop/tests/appearance/obj/
+
+*.pfx
+
+*.p12
+
+*.key
+
+.env
+
+.env.*

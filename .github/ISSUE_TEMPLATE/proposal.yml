@@ -1,0 +1,17 @@
+name: Proposal
+description: Suggest a focused change to an application, shared component or documentation.
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What are you trying to do and where do you get stuck?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Proposed change
+      description: Describe what would help. Note any API, interoperability, or security impact if known.
+    validations:
+      required: true

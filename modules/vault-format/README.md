@@ -13,6 +13,6 @@ calls `reset_password`, `save` or a migration routine on an input file.
 cargo test --locked --release -p kryptocore-vault-format
 ```
 
-This crate is maintained with the private application source. It is not a new
+This crate is maintained with the open-source application workspaces. It is not a new
 public encryption primitive or a replacement format. No general recovery key,
 back door or bypass is provided.

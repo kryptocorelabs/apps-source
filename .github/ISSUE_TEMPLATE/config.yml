@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/kryptocorelabs/apps-source/security/advisories/new
+    about: Keep security details and real user data out of public issues.
+  - name: Ecosystem design discussions
+    url: https://github.com/kryptocorelabs/kryptocore/discussions
+    about: Discuss shared architecture and the public project charter.

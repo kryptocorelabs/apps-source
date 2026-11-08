@@ -47,7 +47,7 @@ passwords, decrypted records or ciphertext. It deliberately retains the
 See [architecture and limits](ARCHITECTURE.md), [security](SECURITY.md),
 [release notes](RELEASE_NOTES.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
 This repository hosts public documentation and downloads; application source
-is maintained in the private application workspace. KryptoCore and its optional
+is open under MIT in the application workspace. KryptoCore and its optional
 [signature companion](https://github.com/kryptocorelabs/kryptocore/tree/main/modules/signatures)
 remain open source. Rescue uses the signature companion through the shared KCC reader.
 
