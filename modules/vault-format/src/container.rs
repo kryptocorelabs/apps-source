@@ -21,11 +21,23 @@ const MAX_FILE: usize = 4 * 1024 * 1024;
 #[path = "epoch_tests.rs"]
 mod epoch_tests;
 
+#[cfg(test)]
+#[path = "migration_tests.rs"]
+mod migration_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Revision {
     pub vault_id: [u8; 16],
     pub epoch: u64,
+}
+
+/// Format facts derived from the same authenticated bytes as the plaintext.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct VaultMetadata {
+    pub format_version: u8,
+    pub recovery_available: bool,
+    pub revision: Option<Revision>,
 }
 
 pub const REVISION_REJECTED: &str = "Älterer oder anderer Tresorstand erkannt. Nutze für die bewusste Rettung eine Kopie in Rescue.";
@@ -106,13 +118,36 @@ pub fn open_with_revision(
     secret: &[u8],
     recovery: bool,
 ) -> Result<(Zeroizing<Vec<u8>>, Option<Revision>), &'static str> {
+    let (data, metadata) = open_with_metadata(path, secret, recovery)?;
+    Ok((data, metadata.revision))
+}
+
+pub fn open_with_metadata(
+    path: &Path,
+    secret: &[u8],
+    recovery: bool,
+) -> Result<(Zeroizing<Vec<u8>>, VaultMetadata), &'static str> {
     let file = read(path)?;
     let data = if recovery {
         open_recoverable(&file, secret, 1)?.1
     } else {
         open_bytes(&file, secret)?
     };
-    Ok((data, revision(&file)))
+    let format_version = if file.starts_with(EPOCH_HEADER) {
+        3
+    } else if file.starts_with(RECOVERY_HEADER) {
+        2
+    } else {
+        1
+    };
+    Ok((
+        data,
+        VaultMetadata {
+            format_version,
+            recovery_available: format_version >= 2,
+            revision: revision(&file),
+        },
+    ))
 }
 
 /// Explicit opt-in copy. Original bytes, slots, seed and recovery access stay valid.
@@ -332,6 +367,26 @@ pub fn enable_recovery(
     create: bool,
 ) -> Result<(), &'static str> {
     enable_recovery_with_revision(path, password, recovery, create, None).map(|_| ())
+}
+
+/// Atomically create a complete KCV2 vault with a fresh seed and both fresh slots.
+/// No source or existing destination is replaced, including on validation failure.
+pub fn create_with_recovery(
+    path: &Path,
+    password: &[u8],
+    recovery: &[u8],
+    data: &[u8],
+) -> Result<(), &'static str> {
+    if data.len() > MAX_FILE - RECOVERY_AAD_LEN - 24 - 16 {
+        return Err("Tresor überschreitet das Vorschaulimit von 4 MiB");
+    }
+    serde_json::from_slice::<Vec<crate::Login>>(data).map_err(|_| "Ungültige Tresoreinträge")?;
+    let mut seed = Zeroizing::new([0; 32]);
+    getrandom::fill(&mut seed[..]).map_err(|_| "Zufallsquelle nicht verfügbar")?;
+    let mut header = RECOVERY_HEADER.to_vec();
+    append_slot(&mut header, password, 0, &seed[..])?;
+    append_slot(&mut header, recovery, 1, &seed[..])?;
+    write_payload(path, &payload_key(&seed[..])?, &header, data, true)
 }
 
 pub fn enable_recovery_with_revision(

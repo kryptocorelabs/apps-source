@@ -23,6 +23,12 @@ back door or bypass is provided.
 caller-supplied freshness minima. KCV1/KCV2 remain unchanged; old readers reject
 KCV3. Rescue reads all three without claiming backup freshness.
 
+`open_with_metadata` returns format/recovery facts from the same authenticated
+bytes as the plaintext. `create_with_recovery` atomically creates a complete
+KCV2 vault with a fresh seed and fresh slots; it never imports old keys or
+overwrites an existing destination. JSON transfer validation and the UI live
+in Vault, outside the minimal Core.
+
 ## Recovery reset boundary
 
 In the unreleased recovery hardening, `reset_password` authenticates the source
