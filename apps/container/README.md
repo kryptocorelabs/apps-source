@@ -50,7 +50,9 @@ separate trusted channel. Anyone with it can read or recreate a container;
 there is no passphrase recovery. Avoid screen sharing or persistent terminal
 logs when generating a passphrase.
 
-### Verify the sender
+#[Security in 30 seconds](https://github.com/kryptocorelabs/kryptocore/blob/main/SECURITY-IN-BRIEF.md) · [Rescue-first guide](https://github.com/kryptocorelabs/kryptocore/blob/main/RESCUE-FIRST.md) · [Verify a download](https://github.com/kryptocorelabs/kryptocore/blob/main/VERIFY-DOWNLOADS.md)
+
+## Verify the sender
 
 Use a dedicated Ed25519 signing key with OpenSSH. The recipient adds the
 sender's public key to their local `allowed_signers` file only after checking

@@ -12,6 +12,8 @@ filename, platform, byte length and SHA-256. Expected product and version are
 explicit inputs. It never executes the file, extracts archives, follows download
 URLs or imports a publisher key from the manifest.
 
+[Security in 30 seconds](https://github.com/kryptocorelabs/kryptocore/blob/main/SECURITY-IN-BRIEF.md) · [Rescue-first guide](https://github.com/kryptocorelabs/kryptocore/blob/main/RESCUE-FIRST.md) · [Verify a download](https://github.com/kryptocorelabs/kryptocore/blob/main/VERIFY-DOWNLOADS.md)
+
 ## Build and check
 
 ```sh
