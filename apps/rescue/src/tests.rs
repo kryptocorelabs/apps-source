@@ -12,6 +12,7 @@ fn recognizes_current_markers_but_never_claims_authentication() {
     for (marker, size, expected) in [
         (b"KCV1\0".as_slice(), 61, Format::VaultV1),
         (b"KCV2\0".as_slice(), 221, Format::VaultV2),
+        (b"KCV3\0".as_slice(), 245, Format::VaultV3),
         (b"KCC\0\0\0\0\x01".as_slice(), 136, Format::ContainerV1),
         (b"KCMI\0\0\0\x01".as_slice(), 128, Format::MsgIdentityV1),
         (b"KCMB\0\0\0\x01".as_slice(), 48, Format::MsgStoreV1),

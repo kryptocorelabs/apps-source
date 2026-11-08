@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum Format {
     VaultV1,
     VaultV2,
+    VaultV3,
     ContainerV1,
     EmbeddedContainerV1,
     MsgIdentityV1,
@@ -38,6 +39,14 @@ pub(crate) fn identify(header: &[u8]) -> Option<Descriptor> {
                 VaultV2,
                 "Vault / KCV2",
                 221,
+                4 * 1024 * 1024,
+                &[Password, RecoveryKey],
+            )
+        } else if header.starts_with(b"KCV3\0") {
+            (
+                VaultV3,
+                "Vault / KCV3",
+                245,
                 4 * 1024 * 1024,
                 &[Password, RecoveryKey],
             )

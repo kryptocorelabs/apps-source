@@ -71,7 +71,7 @@ internal sealed class RescueWindow : Shell
         var recovery = Section("Daten retten", "Vault als JSON-Datei · Container in einen neuen Ordner");
         recovery.Children.Add(Text("Die Ausgabe ist unverschlüsselt. Wähle einen geschützten Speicherort. Absendersignaturen und ein lokaler Malware-Scan sind getrennte, optionale Prüfungen. Dateien werden nie automatisch geöffnet.", 14, true));
         credential.Items.Add(new ComboBoxItem { Content = "Passwort", Tag = "password" });
-        credential.Items.Add(new ComboBoxItem { Content = "Wiederherstellungsschlüssel (nur KCV2)", Tag = "recovery_key", IsEnabled = false });
+        credential.Items.Add(new ComboBoxItem { Content = "Wiederherstellungsschlüssel (KCV2 / KCV3)", Tag = "recovery_key", IsEnabled = false });
         credential.SelectedIndex = 0;
         Field(recovery, "Zugangsart", credential);
         Field(recovery, "Passwort oder Wiederherstellungsschlüssel", secret);
@@ -112,7 +112,7 @@ internal sealed class RescueWindow : Shell
         page.Children.Add(new Expander { Header = "Dateiprüfung und Metadaten", Content = Card(details), Margin = new Thickness(0, 16, 0, 0) });
         Tab("Dateiprüfung", page);
         var boundaries = Section("Unabhängiger Zugang", "Rescue soll vorhandene Zugänge nutzen und Quellen unverändert lassen.");
-        boundaries.Children.Add(Text("Vault KCV2: Passwort oder eingerichteter Wiederherstellungsschlüssel. Container und MSG-Identitäten haben derzeit nur einen Passwortzugang. MSG-Kontaktdateien benötigen zusätzlich die zugehörige Identität.", 14));
+        boundaries.Children.Add(Text("Vault KCV2/KCV3: Passwort oder eingerichteter Wiederherstellungsschlüssel. Rescue öffnet bewusst auch alte Sicherungen und bestätigt nicht deren Aktualität. Container und MSG-Identitäten haben derzeit nur einen Passwortzugang. MSG-Kontaktdateien benötigen zusätzlich die zugehörige Identität.", 14));
         boundaries.Children.Add(Text("Ohne gültigen Zugang gibt es keine Entschlüsselung. Fehlende Daten und beschädigte verschlüsselte Inhalte lassen sich nicht durch einen Generalschlüssel reparieren. Rescue ändert kein Passwort und überschreibt weder Quellen noch bestehende Ziele. Aktuelle MSG-Sitzungsverläufe werden nicht dauerhaft gespeichert.", 14, true));
         Tab("Konzept", Card(boundaries));
 
@@ -155,7 +155,7 @@ internal sealed class RescueWindow : Shell
                     report = reply.Text;
                     selectedFormat = result.Format;
                     signed.IsEnabled = result.Format is "container_v1" or "embedded_container_v1";
-                    ((ComboBoxItem)credential.Items[1]).IsEnabled = result.Format == "vault_v2";
+                    ((ComboBoxItem)credential.Items[1]).IsEnabled = result.Format is "vault_v2" or "vault_v3";
                     save.IsEnabled = true;
                 });
             if (!ok) format.Text = "Keine unterstützte, lesbare Dateistruktur erkannt";
@@ -176,7 +176,7 @@ internal sealed class RescueWindow : Shell
         }
     }
 
-    private bool RecoverySupported => selectedFormat is "vault_v1" or "vault_v2" or "container_v1" or "embedded_container_v1";
+    private bool RecoverySupported => selectedFormat is "vault_v1" or "vault_v2" or "vault_v3" or "container_v1" or "embedded_container_v1";
 
     private void UpdateRecovery()
     {
@@ -189,7 +189,7 @@ internal sealed class RescueWindow : Shell
     private void ChooseDestination()
     {
         if (!RecoverySupported) { SetStatus("Wähle zuerst eine unterstützte Vault- oder Container-Datei.", true); return; }
-        if (selectedFormat is "vault_v1" or "vault_v2")
+        if (selectedFormat is "vault_v1" or "vault_v2" or "vault_v3")
         {
             var picker = new SaveFileDialog { Title = "Neuen unverschlüsselten Vault-Export speichern", Filter = "JSON-Datei (*.json)|*.json",
                 FileName = "KryptoCore-Vault-Rettung.json", OverwritePrompt = false };

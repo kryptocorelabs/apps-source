@@ -17,6 +17,12 @@ This crate is maintained with the open-source application workspaces. It is not 
 public encryption primitive or a replacement format. No general recovery key,
 back door or bypass is provided.
 
+## Optional epoch profile
+
+[KCV3](KCV3.md) is an explicit opt-in copy with authenticated ID/epoch and
+caller-supplied freshness minima. KCV1/KCV2 remain unchanged; old readers reject
+KCV3. Rescue reads all three without claiming backup freshness.
+
 ## Recovery reset boundary
 
 In the unreleased recovery hardening, `reset_password` authenticates the source

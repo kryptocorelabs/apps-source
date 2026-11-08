@@ -43,6 +43,15 @@ internal static class Program
             if (report.Contains(source) || !report.Contains("not_verified") || !report.Contains("\"data_access_available\":false"))
                 throw new Exception("Unexpected diagnostic disclosure or access claim");
             if (!File.ReadAllBytes(source).SequenceEqual(bytes) || root.GetFiles().Length != 1) throw new Exception("Inspection changed sources");
+            var epochMarker = new byte[245];
+            Encoding.ASCII.GetBytes("KCV3\0").CopyTo(epochMarker, 0);
+            File.WriteAllBytes(source, epochMarker);
+            Inspect(source);
+            var recoveryChoice = Elements(window).OfType<ComboBoxItem>().Single(x => Equals(x.Tag, "recovery_key"));
+            if (!Text("Vault / KCV3") || !recoveryChoice.IsEnabled || !Text("Inhalte sind nicht authentifiziert."))
+                throw new Exception("KCV3 recognition or recovery credential choice failed");
+            File.WriteAllBytes(source, bytes);
+            Inspect(source);
             Render(window);
             string output = Path.Combine(root.FullName, "report.json");
             Complete(Write(output, report, CancellationToken.None));

@@ -12,7 +12,76 @@ const HEADER: &[u8] = b"KCV1\0";
 const RECOVERY_HEADER: &[u8] = b"KCV2\0";
 const SLOT_LEN: usize = 16 + 24 + 48;
 const RECOVERY_AAD_LEN: usize = RECOVERY_HEADER.len() + 2 * SLOT_LEN;
+const EPOCH_HEADER: &[u8] = b"KCV3\0";
+const EPOCH_PREFIX: usize = 5 + 16 + 8;
+const EPOCH_AAD_LEN: usize = EPOCH_PREFIX + 2 * SLOT_LEN;
 const MAX_FILE: usize = 4 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "epoch_tests.rs"]
+mod epoch_tests;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision {
+    pub vault_id: [u8; 16],
+    pub epoch: u64,
+}
+
+pub const REVISION_REJECTED: &str = "Älterer oder anderer Tresorstand erkannt. Nutze für die bewusste Rettung eine Kopie in Rescue.";
+
+/// Caller-owned freshness policy; this is not an external trusted counter.
+pub fn check_revision(
+    observed: Option<Revision>,
+    minimum: Option<Revision>,
+) -> Result<(), &'static str> {
+    if let Some(minimum) = minimum {
+        if !observed.is_some_and(|r| r.vault_id == minimum.vault_id && r.epoch >= minimum.epoch) {
+            return Err(REVISION_REJECTED);
+        }
+    }
+    Ok(())
+}
+
+fn layout(file: &[u8]) -> Result<(usize, usize), &'static str> {
+    let (slots, aad) = if file.starts_with(RECOVERY_HEADER) {
+        (5, RECOVERY_AAD_LEN)
+    } else if file.starts_with(EPOCH_HEADER) {
+        (EPOCH_PREFIX, EPOCH_AAD_LEN)
+    } else {
+        return Err("Dieser Tresor hat keinen lesbaren Wiederherstellungszugang");
+    };
+    if file.len() < aad + 24 + 16 {
+        return Err("Ungültiges Tresorformat oder Dateigröße");
+    }
+    if slots == EPOCH_PREFIX
+        && u64::from_be_bytes(file[21..29].try_into().expect("checked epoch")) == 0
+    {
+        return Err("Ungültige Tresorepoche");
+    }
+    Ok((slots, aad))
+}
+
+// Only expose this metadata after payload authentication.
+fn revision(file: &[u8]) -> Option<Revision> {
+    file.starts_with(EPOCH_HEADER).then(|| Revision {
+        vault_id: file[5..21].try_into().expect("validated layout"),
+        epoch: u64::from_be_bytes(file[21..29].try_into().expect("validated layout")),
+    })
+}
+
+fn advanced_header(file: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let (_, aad) = layout(file)?;
+    let mut header = file[..aad].to_vec();
+    if let Some(r) = revision(file) {
+        let next = r
+            .epoch
+            .checked_add(1)
+            .ok_or("Tresorepoche ist ausgeschöpft")?;
+        header[21..29].copy_from_slice(&next.to_be_bytes());
+    }
+    Ok(header)
+}
 
 fn read(path: &Path) -> Result<Vec<u8>, &'static str> {
     let mut file = Vec::new();
@@ -32,6 +101,47 @@ pub fn open(path: &Path, password: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'static
     open_bytes(&file, password)
 }
 
+pub fn open_with_revision(
+    path: &Path,
+    secret: &[u8],
+    recovery: bool,
+) -> Result<(Zeroizing<Vec<u8>>, Option<Revision>), &'static str> {
+    let file = read(path)?;
+    let data = if recovery {
+        open_recoverable(&file, secret, 1)?.1
+    } else {
+        open_bytes(&file, secret)?
+    };
+    Ok((data, revision(&file)))
+}
+
+/// Explicit opt-in copy. Original bytes, slots, seed and recovery access stay valid.
+pub fn enable_epoch_copy(
+    path: &Path,
+    destination: &Path,
+    password: &[u8],
+) -> Result<Revision, &'static str> {
+    let file = read(path)?;
+    if !file.starts_with(RECOVERY_HEADER) {
+        return Err(
+            "Richte zuerst ein Notfallblatt ein. Die Aktivierung erwartet einen KCV2-Tresor.",
+        );
+    }
+    let (seed, data) = open_recoverable(&file, password, 0)?;
+    serde_json::from_slice::<Vec<crate::Login>>(&data).map_err(|_| "Ungültige Tresoreinträge")?;
+    let mut id = [0; 16];
+    getrandom::fill(&mut id).map_err(|_| "Zufallsquelle nicht verfügbar")?;
+    let mut header = EPOCH_HEADER.to_vec();
+    header.extend_from_slice(&id);
+    header.extend_from_slice(&1u64.to_be_bytes());
+    header.extend_from_slice(&file[5..RECOVERY_AAD_LEN]);
+    write_payload(destination, &payload_key(&seed)?, &header, &data, true)?;
+    Ok(Revision {
+        vault_id: id,
+        epoch: 1,
+    })
+}
+
 /// Read-only KCV2 recovery access. Does not reset a password or write to the source.
 pub fn open_with_recovery(
     path: &Path,
@@ -42,7 +152,7 @@ pub fn open_with_recovery(
 }
 
 fn open_bytes(file: &[u8], password: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'static str> {
-    if file.starts_with(RECOVERY_HEADER) {
+    if file.starts_with(RECOVERY_HEADER) || file.starts_with(EPOCH_HEADER) {
         return open_recoverable(file, password, 0).map(|(_, data)| data);
     }
     let aad_len = HEADER.len() + 16;
@@ -61,23 +171,34 @@ fn open_bytes(file: &[u8], password: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'stat
 }
 
 pub fn save(path: &Path, password: &[u8], data: &[u8], create: bool) -> Result<(), &'static str> {
+    save_with_revision(path, password, data, create, None).map(|_| ())
+}
+
+pub fn save_with_revision(
+    path: &Path,
+    password: &[u8],
+    data: &[u8],
+    create: bool,
+    minimum: Option<Revision>,
+) -> Result<Option<Revision>, &'static str> {
+    if create && minimum.is_some() {
+        return Err("Neue Datei darf keinen bestehenden Versionsbezug ersetzen");
+    }
     if !create {
         let file = read(path)?;
-        if file.starts_with(RECOVERY_HEADER) {
+        if file.starts_with(RECOVERY_HEADER) || file.starts_with(EPOCH_HEADER) {
             let (seed, _) = open_recoverable(&file, password, 0)?;
-            return write_payload(
-                path,
-                &payload_key(&seed)?,
-                &file[..RECOVERY_AAD_LEN],
-                data,
-                false,
-            );
+            check_revision(revision(&file), minimum)?;
+            let header = advanced_header(&file)?;
+            write_payload(path, &payload_key(&seed)?, &header, data, false)?;
+            return Ok(revision(&header));
         }
         if !file.starts_with(HEADER) {
             return Err("Unbekanntes Tresorformat");
         }
         // Authenticate the file being replaced, even when the caller opened an earlier copy.
         open_bytes(&file, password)?;
+        check_revision(None, minimum)?;
     }
     if data.len() > MAX_FILE - HEADER.len() - 16 - 24 - 16 {
         return Err("Tresor überschreitet das Vorschaulimit von 4 MiB");
@@ -87,7 +208,8 @@ pub fn save(path: &Path, password: &[u8], data: &[u8], create: bool) -> Result<(
     let key = derive_key(password, &salt).map_err(|_| "Schlüsselableitung fehlgeschlagen")?;
     let mut aad = HEADER.to_vec();
     aad.extend_from_slice(&salt);
-    write_payload(path, &key, &aad, data, create)
+    write_payload(path, &key, &aad, data, create)?;
+    Ok(None)
 }
 
 fn write_payload(
@@ -106,10 +228,22 @@ fn write_payload(
 }
 
 pub fn backup(path: &Path, destination: &Path, password: &[u8]) -> Result<(), &'static str> {
+    backup_with_revision(path, destination, password, None).map(|_| ())
+}
+
+pub fn backup_with_revision(
+    path: &Path,
+    destination: &Path,
+    password: &[u8],
+    minimum: Option<Revision>,
+) -> Result<Option<Revision>, &'static str> {
     let file = read(path)?;
     let data = open_bytes(&file, password)?;
+    let observed = revision(&file);
+    check_revision(observed, minimum)?;
     serde_json::from_slice::<Vec<crate::Login>>(&data).map_err(|_| "Ungültige Tresoreinträge")?;
-    write_file(destination, &[&file], true)
+    write_file(destination, &[&file], true)?;
+    Ok(observed)
 }
 
 fn write_file(path: &Path, chunks: &[&[u8]], create: bool) -> Result<(), &'static str> {
@@ -170,24 +304,22 @@ fn append_slot(
 type Opened = (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>);
 
 fn open_recoverable(file: &[u8], secret: &[u8], role: u8) -> Result<Opened, &'static str> {
-    if !file.starts_with(RECOVERY_HEADER) || file.len() < RECOVERY_AAD_LEN + 24 + 16 {
-        return Err("Dieser Tresor hat keinen lesbaren Wiederherstellungszugang");
-    }
-    let start = RECOVERY_HEADER.len() + usize::from(role) * SLOT_LEN;
+    let (slots, aad_len) = layout(file)?;
+    let start = slots + usize::from(role) * SLOT_LEN;
     let slot = &file[start..start + SLOT_LEN];
     let salt = slot[..16].try_into().expect("fixed slot salt");
     let nonce = slot[16..40].try_into().expect("fixed slot nonce");
     let key = derive_key(secret, &salt).map_err(|_| "Schlüsselableitung fehlgeschlagen")?;
     let seed = decrypt(&key, &nonce, &slot[40..], &slot_aad(role))
         .map_err(|_| "Falscher Zugang oder beschädigter Tresor")?;
-    let nonce = file[RECOVERY_AAD_LEN..RECOVERY_AAD_LEN + 24]
+    let nonce = file[aad_len..aad_len + 24]
         .try_into()
         .expect("fixed payload nonce");
     let data = decrypt(
         &payload_key(&seed)?,
         &nonce,
-        &file[RECOVERY_AAD_LEN + 24..],
-        &file[..RECOVERY_AAD_LEN],
+        &file[aad_len + 24..],
+        &file[..aad_len],
     )
     .map_err(|_| "Beschädigter Tresor")?;
     Ok((seed, data))
@@ -199,10 +331,26 @@ pub fn enable_recovery(
     recovery: &[u8],
     create: bool,
 ) -> Result<(), &'static str> {
+    enable_recovery_with_revision(path, password, recovery, create, None).map(|_| ())
+}
+
+pub fn enable_recovery_with_revision(
+    path: &Path,
+    password: &[u8],
+    recovery: &[u8],
+    create: bool,
+    minimum: Option<Revision>,
+) -> Result<Option<Revision>, &'static str> {
+    if create && minimum.is_some() {
+        return Err("Neue Datei darf keinen bestehenden Versionsbezug ersetzen");
+    }
+    let mut current_revision = None;
     let data = if create {
         Zeroizing::new(b"[]".to_vec())
     } else {
-        let data = open(path, password)?;
+        let (data, observed) = open_with_revision(path, password, false)?;
+        check_revision(observed, minimum)?;
+        current_revision = observed;
         serde_json::from_slice::<Vec<crate::Login>>(&data)
             .map_err(|_| "Ungültige Tresoreinträge")?;
         data
@@ -210,9 +358,20 @@ pub fn enable_recovery(
     let mut seed = Zeroizing::new([0; 32]);
     getrandom::fill(&mut seed[..]).map_err(|_| "Zufallsquelle nicht verfügbar")?;
     let mut header = RECOVERY_HEADER.to_vec();
+    if let Some(r) = current_revision {
+        header = EPOCH_HEADER.to_vec();
+        header.extend_from_slice(&r.vault_id);
+        header.extend_from_slice(
+            &r.epoch
+                .checked_add(1)
+                .ok_or("Tresorepoche ist ausgeschöpft")?
+                .to_be_bytes(),
+        );
+    }
     append_slot(&mut header, password, 0, &seed[..])?;
     append_slot(&mut header, recovery, 1, &seed[..])?;
-    write_payload(path, &payload_key(&seed[..])?, &header, &data, create)
+    write_payload(path, &payload_key(&seed[..])?, &header, &data, create)?;
+    Ok(revision(&header))
 }
 
 /// Authenticate recovery access, rotate the payload seed and replace both slots.
@@ -222,16 +381,28 @@ pub fn reset_password(
     recovery: &[u8],
     password: &[u8],
 ) -> Result<Vec<crate::Login>, &'static str> {
+    reset_password_with_revision(path, recovery, password, None).map(|(entries, _)| entries)
+}
+
+pub fn reset_password_with_revision(
+    path: &Path,
+    recovery: &[u8],
+    password: &[u8],
+    minimum: Option<Revision>,
+) -> Result<(Vec<crate::Login>, Option<Revision>), &'static str> {
     let file = read(path)?;
     let data = open_recoverable(&file, recovery, 1)?.1;
+    check_revision(revision(&file), minimum)?;
     let entries = serde_json::from_slice(&data).map_err(|_| "Ungültige Tresoreinträge")?;
     let mut seed = Zeroizing::new([0; 32]);
     getrandom::fill(&mut seed[..]).map_err(|_| "Zufallsquelle nicht verfügbar")?;
-    let mut header = RECOVERY_HEADER.to_vec();
+    let (slots, _) = layout(&file)?;
+    let advanced = advanced_header(&file)?;
+    let mut header = advanced[..slots].to_vec();
     append_slot(&mut header, password, 0, &seed[..])?;
     append_slot(&mut header, recovery, 1, &seed[..])?;
     write_payload(path, &payload_key(&seed[..])?, &header, &data, false)?;
-    Ok(entries)
+    Ok((entries, revision(&header)))
 }
 
 #[cfg(test)]

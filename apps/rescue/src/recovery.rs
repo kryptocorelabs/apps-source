@@ -116,7 +116,11 @@ pub fn recover_with_options(
     }
     if !matches!(
         source.format,
-        Format::VaultV1 | Format::VaultV2 | Format::ContainerV1 | Format::EmbeddedContainerV1
+        Format::VaultV1
+            | Format::VaultV2
+            | Format::VaultV3
+            | Format::ContainerV1
+            | Format::EmbeddedContainerV1
     ) {
         return Err(RecoveryError::Unsupported);
     }
@@ -139,7 +143,7 @@ pub fn recover_with_options(
         return Err(RecoveryError::InvalidDestination);
     }
     let (entries, bytes) = match source.format {
-        Format::VaultV1 | Format::VaultV2 => {
+        Format::VaultV1 | Format::VaultV2 | Format::VaultV3 => {
             let plaintext = match route {
                 CredentialRoute::Password => kryptocore_vault_format::open(input, secret),
                 CredentialRoute::RecoveryKey => {
