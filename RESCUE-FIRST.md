@@ -28,11 +28,13 @@ readers, not an independent cryptographic implementation or a bypass.
 4. Choose **Speicherort wählen …** (Choose destination) and a new local JSON
    file in a protected, preferably encrypted location. Confirm the plaintext
    warning, then choose **Entschlüsseln und exportieren** (Decrypt and export).
-5. Open the exported JSON with a trusted local text editor. It contains website,
-   username and password records. You can access your accounts and manually
-   recreate entries in a new vault. A general JSON import wizard is not currently
-   available. Protect the export and remove unneeded copies when finished;
-   ordinary deletion does not guarantee secure erasure.
+5. In a current development Vault build, choose **Aus JSON-Export umziehen**
+   (Move from JSON export), select the Rescue JSON and create a new vault with
+   a new password and emergency sheet. Its payload seed is freshly generated.
+   See [migration instructions](https://github.com/kryptocorelabs/vault/blob/main/MIGRATION.md).
+   Older published Vault previews require manually recreating entries using a
+   trusted local editor. Protect the export and remove unneeded copies when
+   finished; ordinary deletion does not guarantee secure erasure.
 
 Rescue authenticates before publishing output, leaves the input unchanged and
 refuses to overwrite an existing destination. A recognized file marker alone
