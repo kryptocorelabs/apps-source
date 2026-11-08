@@ -1,0 +1,18 @@
+[package]
+name = "kryptocore-verify"
+version = "0.1.0-preview.1"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Offline verification of purpose-bound signed release manifests"
+
+[dependencies]
+kryptocore = { path = "../.." }
+kryptocore-signatures = { path = "../../modules/signatures" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10.9"
+zeroize = "1"
+getrandom = "0.3"
+tempfile = "3"
+rpassword = "7.5.4"

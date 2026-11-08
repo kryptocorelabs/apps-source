@@ -344,6 +344,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kryptocore-verify"
+version = "0.1.0-preview.1"
+dependencies = [
+ "getrandom 0.3.4",
+ "kryptocore",
+ "kryptocore-signatures",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "kryptocore-vault-format"
 version = "0.1.0-rc.2"
 dependencies = [

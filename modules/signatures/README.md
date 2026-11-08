@@ -13,6 +13,12 @@ reuses the workspace's curve25519-dalek 4.x and SHA-2 0.10 dependencies. Changes
 to that pin require dependency, strict-validation and interoperability review.
 This is a preview API, not an independently audited component or a new file format.
 
+The [Verify application](https://github.com/kryptocorelabs/apps-source/tree/main/apps/verify)
+uses `Purpose::ReleaseManifest` for exact-byte signed download manifests with
+explicit publisher trust, product/version/platform checks, digest/size binding
+and validity/sequence rules. This is a preview implementation, not an official
+release-key bootstrap or automatic update framework.
+
 ## Use
 
 ```rust
@@ -54,7 +60,7 @@ application migration. Public keys are 32 bytes; detached signatures are 64 byte
 These bytes are **not** OpenSSH signatures, Ed25519ctx or Ed25519ph. No new
 container envelope, certificate or trust store is defined here.
 
-For large files, a future application manifest must explicitly bind a defined
+For large files, an application manifest must explicitly bind a defined
 hash algorithm, exact file digest/length, format version and relevant metadata.
 Do not silently pass an unspecified digest in place of the intended message.
 Canonical serialization belongs to that manifest protocol. Release/contact

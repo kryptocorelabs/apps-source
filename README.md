@@ -3,7 +3,7 @@
 [![Applications CI](https://github.com/kryptocorelabs/apps-source/actions/workflows/apps-ci.yml/badge.svg)](https://github.com/kryptocorelabs/apps-source/actions/workflows/apps-ci.yml)
 [MIT](LICENSE) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Project charter](https://github.com/kryptocorelabs/kryptocore/blob/main/PROJECT_CHARTER.md)
 
-Open-source implementation workspace for Messenger, Container, Rescue and the
+Open-source implementation workspace for Messenger, Container, Rescue, Verify and the
 shared Windows worker. First-party code is MIT licensed; dependencies retain
 their own terms. All applications remain development previews without an
 independent security audit.
@@ -19,6 +19,7 @@ privately through the project's security-reporting channel.
 | MSG | [apps/msg](apps/msg/README.md) | [MSG](https://github.com/kryptocorelabs/msg) |
 | Container | [apps/container](apps/container/README.md) | [Container](https://github.com/kryptocorelabs/container) |
 | Rescue | [apps/rescue](apps/rescue/README.md) | [Rescue](https://github.com/kryptocorelabs/rescue) |
+| Verify | [apps/verify](apps/verify/README.md) | Native CI artifacts; no official release key provisioned yet |
 | Shared Windows UI/worker | [apps/desktop](apps/desktop/README.md) | Included in the app packages |
 
 Vault and Firefox sources are in the separate
