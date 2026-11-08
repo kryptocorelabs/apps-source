@@ -89,6 +89,8 @@ fn epoch_identity_and_counter_are_authenticated_and_cannot_wrap() {
     assert!(save(&path, PW, b"[]", false).is_err());
     assert!(reset_password(&path, RECOVERY, NEW).is_err());
     assert!(enable_recovery(&path, PW, RECOVERY, false).is_err());
+    assert!(change_password_with_revision(&path, PW, NEW, false, None, None).is_err());
+    assert!(change_password_with_revision(&path, PW, NEW, true, Some(RECOVERY), None).is_err());
     assert_eq!(read(&path).unwrap(), maximum);
 }
 

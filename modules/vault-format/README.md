@@ -29,6 +29,16 @@ KCV2 vault with a fresh seed and fresh slots; it never imports old keys or
 overwrites an existing destination. JSON transfer validation and the UI live
 in Vault, outside the minimal Core.
 
+`change_password_with_revision` adds an unlocked change without altering format
+interpretation. Its default retains the KCV2/KCV3 seed and recovery slot; explicit
+rotation takes a recovery credential for newly wrapped access. The GUI generates
+a fresh one and saves a replacement sheet. KCV1 always derives a fresh key and
+stays KCV1. The return value reports the observed revision and whether the key
+changed. Earlier snapshots are not revoked. Existing recovery reset still rotates
+unconditionally. `verified_snapshot` exposes only authenticated ciphertext bytes
+for backups/checksums; SHA-256 remains an application concern, outside this crate
+and the minimal Core.
+
 ## Recovery reset boundary
 
 In the unreleased recovery hardening, `reset_password` authenticates the source

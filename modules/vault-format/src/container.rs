@@ -25,6 +25,10 @@ mod epoch_tests;
 #[path = "migration_tests.rs"]
 mod migration_tests;
 
+#[cfg(test)]
+#[path = "password_tests.rs"]
+mod password_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Revision {
@@ -272,13 +276,23 @@ pub fn backup_with_revision(
     password: &[u8],
     minimum: Option<Revision>,
 ) -> Result<Option<Revision>, &'static str> {
+    let (file, observed) = verified_snapshot(path, password, minimum)?;
+    write_file(destination, &[&file], true)?;
+    Ok(observed)
+}
+
+/// Return the exact authenticated ciphertext snapshot, never plaintext or keys.
+pub fn verified_snapshot(
+    path: &Path,
+    password: &[u8],
+    minimum: Option<Revision>,
+) -> Result<(Vec<u8>, Option<Revision>), &'static str> {
     let file = read(path)?;
     let data = open_bytes(&file, password)?;
     let observed = revision(&file);
     check_revision(observed, minimum)?;
     serde_json::from_slice::<Vec<crate::Login>>(&data).map_err(|_| "Ungültige Tresoreinträge")?;
-    write_file(destination, &[&file], true)?;
-    Ok(observed)
+    Ok((file, observed))
 }
 
 fn write_file(path: &Path, chunks: &[&[u8]], create: bool) -> Result<(), &'static str> {
@@ -427,6 +441,59 @@ pub fn enable_recovery_with_revision(
     append_slot(&mut header, recovery, 1, &seed[..])?;
     write_payload(path, &payload_key(&seed[..])?, &header, &data, create)?;
     Ok(revision(&header))
+}
+
+/// Unlocked password change. The default retains the KCV2/KCV3 seed and recovery
+/// slot. Rotation requires a caller-supplied recovery credential for the new slot.
+/// Old files remain readable; KCV1 always derives a fresh key and stays KCV1.
+pub fn change_password_with_revision(
+    path: &Path,
+    old_password: &[u8],
+    new_password: &[u8],
+    rotate_key: bool,
+    new_recovery: Option<&[u8]>,
+    minimum: Option<Revision>,
+) -> Result<(Option<Revision>, bool), &'static str> {
+    let file = read(path)?;
+    if file.starts_with(HEADER) {
+        let data = open_bytes(&file, old_password)?;
+        check_revision(None, minimum)?;
+        serde_json::from_slice::<Vec<crate::Login>>(&data)
+            .map_err(|_| "Ungültige Tresoreinträge")?;
+        if new_recovery.is_some() {
+            return Err("Richte den Notfallzugang für diesen älteren Tresor separat ein.");
+        }
+        let mut salt = Salt::default();
+        getrandom::fill(&mut salt).map_err(|_| "Zufallsquelle nicht verfügbar")?;
+        let key =
+            derive_key(new_password, &salt).map_err(|_| "Schlüsselableitung fehlgeschlagen")?;
+        let mut header = HEADER.to_vec();
+        header.extend_from_slice(&salt);
+        write_payload(path, &key, &header, &data, false)?;
+        return Ok((None, true));
+    }
+    let (seed, data) = open_recoverable(&file, old_password, 0)?;
+    check_revision(revision(&file), minimum)?;
+    serde_json::from_slice::<Vec<crate::Login>>(&data).map_err(|_| "Ungültige Tresoreinträge")?;
+    let (slots, aad) = layout(&file)?;
+    let mut header = advanced_header(&file)?[..slots].to_vec();
+    if rotate_key {
+        let recovery = new_recovery
+            .ok_or("Speichere zuerst ein neues Notfallblatt für den Schlüsselwechsel.")?;
+        let mut fresh_seed = Zeroizing::new([0; 32]);
+        getrandom::fill(&mut fresh_seed[..]).map_err(|_| "Zufallsquelle nicht verfügbar")?;
+        append_slot(&mut header, new_password, 0, &fresh_seed[..])?;
+        append_slot(&mut header, recovery, 1, &fresh_seed[..])?;
+        write_payload(path, &payload_key(&fresh_seed[..])?, &header, &data, false)?;
+    } else {
+        if new_recovery.is_some() {
+            return Err("Ein neues Notfallblatt erfordert den Schlüsselwechsel.");
+        }
+        append_slot(&mut header, new_password, 0, &seed)?;
+        header.extend_from_slice(&file[slots + SLOT_LEN..aad]);
+        write_payload(path, &payload_key(&seed)?, &header, &data, false)?;
+    }
+    Ok((revision(&header), rotate_key))
 }
 
 /// Authenticate recovery access, rotate the payload seed and replace both slots.
