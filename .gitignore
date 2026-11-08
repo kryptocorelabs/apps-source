@@ -9,3 +9,7 @@
 *.kcsk
 *.exe
 __pycache__/
+
+/apps/desktop/tests/appearance/bin/
+
+/apps/desktop/tests/appearance/obj/

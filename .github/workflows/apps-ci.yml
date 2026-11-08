@@ -42,6 +42,17 @@ jobs:
       - name: Build Rescue with its embedded worker
         shell: pwsh
         run: dotnet build apps/rescue/windows/Rescue.csproj -c Release "-p:RescueEnginePath=$PWD/target/release/kryptocore-rescue.exe"
+      - name: Render application design at normal and minimum sizes
+        run: |
+          dotnet build apps/desktop/tests/appearance/Appearance.csproj -c Release
+          dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/container/windows/bin/Release/net10.0-windows/KryptoCore-Container.dll Container dist/design-screenshots
+          dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll Rescue dist/design-screenshots
+          dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/msg/windows/bin/Release/net10.0-windows/KryptoCore-MSG.dll Msg dist/design-screenshots
+      - uses: actions/upload-artifact@v6
+        with:
+          name: application-design-screenshots
+          path: dist/design-screenshots/*.png
+          if-no-files-found: error
       - name: Test per-contact message and draft isolation
         run: |
           dotnet build apps/msg/tests/windows/Check.csproj -o dist/msg-ui-check

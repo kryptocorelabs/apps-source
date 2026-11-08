@@ -1,13 +1,12 @@
 using System.IO;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Interop;
 using Microsoft.Win32;
+using System.Runtime.InteropServices;
 
 namespace KryptoCore.Desktop;
 
@@ -18,7 +17,7 @@ internal sealed class ContainerWindow : Shell
     private const string Signatures = "Signaturdatei (*.sig)|*.sig|Alle Dateien (*.*)|*.*";
     private const string Files = "Alle Dateien (*.*)|*.*";
     private const string Tools = "Windows-Programm (*.exe)|*.exe";
-    private readonly Brush glass = new SolidColorBrush(Color.FromArgb(212, 23, 35, 50));
+    private readonly Brush glass = new SolidColorBrush(Color.FromArgb(245, 27, 40, 50));
     private Action showCreate = null!;
     private Action showOpen = null!;
     private Action<IEnumerable<string>> addSources = null!;
@@ -44,7 +43,6 @@ internal sealed class ContainerWindow : Shell
             Tab("Signaturen", NativeSignatureView());
             Tab("Erweitert", SignatureView());
         }
-        SourceInitialized += (_, _) => EnableBackdrop();
     }
 
     internal void OpenFromFile(string path)
@@ -69,7 +67,7 @@ internal sealed class ContainerWindow : Shell
         var introduction = Section("Dateien sicher weitergeben", "Wähle eine Aktion oder ziehe deine Dateien direkt hierher.");
         ((TextBlock)introduction.Children[0]).FontSize = 27;
         var intro = GlassCard(introduction);
-        intro.Background = new LinearGradientBrush(Color.FromArgb(225, 27, 58, 62), Color.FromArgb(212, 22, 34, 50), 0);
+        intro.Background = new LinearGradientBrush(Color.FromRgb(24, 60, 63), Color.FromRgb(27, 40, 50), 0);
         intro.Margin = new Thickness(0, 0, 0, 15);
         page.Children.Add(intro);
         page.Children.Add(Columns(
@@ -100,13 +98,13 @@ internal sealed class ContainerWindow : Shell
         icon.Foreground = Brush("Mint");
         icon.Margin = new Thickness(0, 0, 0, 10);
         content.Children.Insert(0, icon);
-        content.Width = 245;
+        content.HorizontalAlignment = HorizontalAlignment.Stretch;
         var button = Button(title, activate);
         AutomationProperties.SetName(button, title);
         button.Content = content;
         button.ContentTemplate = null;
         button.Background = glass;
-        button.Padding = new Thickness(16);
+        button.Padding = new Thickness(20);
         button.Margin = new Thickness(0, 0, 10, 0);
         button.HorizontalAlignment = HorizontalAlignment.Stretch;
         return button;
@@ -141,7 +139,7 @@ internal sealed class ContainerWindow : Shell
                 list.Items.Add(new SourceItem(path, string.IsNullOrEmpty(name) ? path : name));
             }
         };
-        var itemStyle = new Style(typeof(ListBoxItem));
+        var itemStyle = new Style(typeof(ListBoxItem), (Style)Application.Current.FindResource(typeof(ListBoxItem)));
         itemStyle.Setters.Add(new Setter(ToolTipProperty, new System.Windows.Data.Binding(nameof(SourceItem.Path))));
         list.ItemContainerStyle = itemStyle;
         EnableDrop(dropArea, paths => addSources(paths));
@@ -567,35 +565,6 @@ internal sealed class ContainerWindow : Shell
             SetStatus("Der Ordner konnte nicht geöffnet werden.", true);
         }
     }
-
-    private void EnableBackdrop()
-    {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22621) || SystemParameters.HighContrast) return;
-        if (PresentationSource.FromVisual(this) is not HwndSource source || source.CompositionTarget is null) return;
-        const int darkMode = 20;
-        const int systemBackdropType = 38;
-        const int mica = 2;
-        int enabled = 1;
-        int backdrop = mica;
-        var frame = new FrameMargins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-        _ = DwmSetWindowAttribute(source.Handle, darkMode, ref enabled, sizeof(int));
-        if (DwmSetWindowAttribute(source.Handle, systemBackdropType, ref backdrop, sizeof(int)) != 0
-            || DwmExtendFrameIntoClientArea(source.Handle, ref frame) != 0) return;
-        source.CompositionTarget.BackgroundColor = Colors.Transparent;
-        Background = new SolidColorBrush(Color.FromArgb(95, 14, 22, 33));
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FrameMargins
-    {
-        public int Left, Right, Top, Bottom;
-    }
-
-    [DllImport("dwmapi.dll", ExactSpelling = true)]
-    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
-
-    [DllImport("dwmapi.dll", ExactSpelling = true)]
-    private static extern int DwmExtendFrameIntoClientArea(IntPtr window, ref FrameMargins margins);
 
     private static string FileStem(string name)
     {

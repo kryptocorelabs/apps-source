@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="../../desktop/windows/Shared/Engine.cs" Link="Engine.cs" />
     <Compile Include="../../desktop/windows/Shared/Shell.cs" Link="Shell.cs" />
+    <Compile Include="../../desktop/windows/Shared/DesktopFrame.cs" Link="DesktopFrame.cs" />
     <Page Include="../../desktop/windows/Shared/Theme.xaml" Link="Theme.xaml" />
   </ItemGroup>
   <ItemGroup Condition="'$(RescueEnginePath)' != ''">

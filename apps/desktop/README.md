@@ -53,3 +53,12 @@ The apps invoke a local Rust worker without a console. Passwords and
 messages are sent through a private process pipe, separate from arguments
 and diagnostics. The same Rust libraries implement the CLI and GUI
 operations and read the same on-disk formats.
+
+
+## Shared application appearance
+
+The current development interface follows the Messenger design: a consistent
+dark palette, mint focus accents, rounded cards and compact product branding.
+Windows apps share their frame and controls; Vault keeps its compact Qt layout.
+These interface changes do not replace released assets or change encrypted
+formats. See the design review build notes for the exact build and test scope.

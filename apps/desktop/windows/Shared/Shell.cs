@@ -6,7 +6,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
-using Ellipse = System.Windows.Shapes.Ellipse;
 
 namespace KryptoCore.Desktop;
 
@@ -38,34 +37,6 @@ internal abstract class Shell : Window
         Foreground = Brush("Ink");
         UseLayoutRounding = true;
 
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 20), LastChildFill = true };
-        var emblem = new Grid { Width = 52, Height = 52, Margin = new Thickness(0, 4, 16, 0), VerticalAlignment = VerticalAlignment.Top };
-        if (emblemArtwork is null)
-        {
-            emblem.Children.Add(new Ellipse { Fill = new SolidColorBrush(Color.FromRgb(28, 57, 66)), Stroke = Brush("Mint"), StrokeThickness = 1.5 });
-            var glyph = Text("K", 25);
-            glyph.Foreground = Brush("Mint");
-            glyph.FontWeight = FontWeights.SemiBold;
-            glyph.HorizontalAlignment = HorizontalAlignment.Center;
-            glyph.VerticalAlignment = VerticalAlignment.Center;
-            emblem.Children.Add(glyph);
-        }
-        else
-        {
-            emblem.Children.Add(new Border { Background = emblemArtwork, CornerRadius = new CornerRadius(10) });
-        }
-        header.Children.Add(emblem);
-        var heading = new StackPanel();
-        var brand = Text("KRYPTOCORE LABS", 11);
-        brand.Foreground = Brush("Mint");
-        brand.FontWeight = FontWeights.SemiBold;
-        heading.Children.Add(brand);
-        var title = Text(product, 32);
-        title.FontWeight = FontWeights.SemiBold;
-        heading.Children.Add(title);
-        heading.Children.Add(Text(description, 14, true));
-        header.Children.Add(heading);
-
         footer = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 10, 0, 0) };
         cancel = Button("Abbrechen", () => cancellation?.Cancel());
         cancel.Visibility = Visibility.Collapsed;
@@ -81,16 +52,7 @@ internal abstract class Shell : Window
         footer.Children.Add(status);
         SetStatus("Bereit · Windows-Vorschau");
 
-        navigation.Margin = new Thickness(0, 0, 0, 14);
-        var root = new DockPanel { Margin = new Thickness(24, 22, 24, 16), LastChildFill = true };
-        DockPanel.SetDock(header, Dock.Top);
-        DockPanel.SetDock(navigation, Dock.Top);
-        DockPanel.SetDock(footer, Dock.Bottom);
-        root.Children.Add(header);
-        root.Children.Add(navigation);
-        root.Children.Add(footer);
-        root.Children.Add(scroll);
-        Content = root;
+        Content = DesktopFrame.Create(this, product == "MSG" ? "Messenger" : product, navigation, scroll, footer);
         Closing += (_, args) =>
         {
             if (busy)
@@ -111,14 +73,13 @@ internal abstract class Shell : Window
             scroll.ScrollToTop();
             foreach (Button tab in tabs)
             {
-                tab.Foreground = Brush(tab == selected ? "Base" : "Ink");
-                tab.Background = Brush(tab == selected ? "Mint" : "Card");
                 tab.Tag = tab == selected ? "selected" : "";
             }
             onSelect?.Invoke();
         }
 
-        var button = new Button { Content = name, Margin = new Thickness(0, 0, 8, 0) };
+        var button = new Button { Content = name };
+        DesktopFrame.StyleNavigation(button);
         button.Click += (_, _) => Show(button);
         tabs.Add(button);
         navigation.Children.Add(button);
@@ -213,12 +174,12 @@ internal abstract class Shell : Window
         return button;
     }
 
-    protected static StackPanel Row(params UIElement[] children)
+    protected static WrapPanel Row(params UIElement[] children)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 2) };
         foreach (UIElement element in children)
         {
-            if (element is FrameworkElement control) control.Margin = new Thickness(0, 0, 8, 0);
+            if (element is FrameworkElement control) control.Margin = new Thickness(0, 0, 8, 6);
             row.Children.Add(element);
         }
         return row;
@@ -239,8 +200,8 @@ internal abstract class Shell : Window
     protected static Border Card(FrameworkElement content) => new()
     {
         Background = Brush("Card"), BorderBrush = Brush("Line"), BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(13), Padding = new Thickness(17),
-        Margin = new Thickness(0, 0, 10, 0), Child = content
+        CornerRadius = new CornerRadius(22), Padding = new Thickness(20),
+        Margin = new Thickness(0, 0, 0, 16), Child = content
     };
 
     protected static Grid Columns(FrameworkElement left, FrameworkElement right)
@@ -248,10 +209,22 @@ internal abstract class Shell : Window
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         left.VerticalAlignment = right.VerticalAlignment = VerticalAlignment.Top;
-        Grid.SetColumn(right, 1);
-        grid.Children.Add(left);
-        grid.Children.Add(right);
+        grid.Children.Add(left); grid.Children.Add(right);
+        void ArrangeColumns()
+        {
+            bool stacked = grid.ActualWidth < 660;
+            Grid.SetRow(right, stacked ? 1 : 0);
+            Grid.SetColumn(right, stacked ? 0 : 1);
+            Grid.SetColumnSpan(left, stacked ? 2 : 1);
+            Grid.SetColumnSpan(right, stacked ? 2 : 1);
+            left.Margin = new Thickness(0, 0, stacked ? 0 : 8, 16);
+            right.Margin = new Thickness(stacked ? 0 : 8, 0, 0, 16);
+        }
+        grid.SizeChanged += (_, _) => ArrangeColumns();
+        ArrangeColumns();
         return grid;
     }
 

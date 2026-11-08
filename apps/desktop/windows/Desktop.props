@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)Shared/Engine.cs" Link="Engine.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Shared/Shell.cs" Link="Shell.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/DesktopFrame.cs" Link="DesktopFrame.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Shared/Program.cs" Link="Program.cs" />
     <Page Include="$(MSBuildThisFileDirectory)Shared/Theme.xaml" Link="Theme.xaml" />
   </ItemGroup>

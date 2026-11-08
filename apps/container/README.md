@@ -105,3 +105,12 @@ for the UI/CLI flow and exact wire bytes. Rescue 0.1.0-preview.3 uses the
 same check. Existing OpenSSH signatures remain separate and compatible.
 Read [malware protection limits](MALWARE-PROTECTION.md): requested scan
 failures block output; no detection is not a safety guarantee.
+
+
+## Shared application appearance
+
+The current development interface follows the Messenger design: a consistent
+dark palette, mint focus accents, rounded cards and compact product branding.
+Windows apps share their frame and controls; Vault keeps its compact Qt layout.
+These interface changes do not replace released assets or change encrypted
+formats. See the design review build notes for the exact build and test scope.

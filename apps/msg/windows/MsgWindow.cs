@@ -95,7 +95,6 @@ internal sealed class MsgWindow : Shell
         showContacts = Tab("Kontakte", contactPage, () => Dispatcher.BeginInvoke(new Action(() => _ = loadContacts())));
         showProfile = Tab("Mein Profil", ProfileView());
         showSettings = Tab("Einstellungen", SettingsView());
-        SetLayout((navigation, page, status) => MessengerFrame.Create(this, navigation, page, status));
         Closed += (_, _) =>
         {
             ClearTicket(ref incomingTicket);
