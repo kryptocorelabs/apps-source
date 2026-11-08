@@ -48,6 +48,10 @@ try {
         if ($Offline) { $publish += @('--source', $localPackages) }
         & dotnet @publish
         if ($LASTEXITCODE -ne 0) { throw "Building the $product Windows app failed." }
+        $binaryName = if ($product -eq 'Msg') { 'MSG' } else { $product }
+        & (Join-Path $repository 'apps/desktop/tests/check-portable.ps1') -Product $product `
+            -Executable (Join-Path $output "KryptoCore-$binaryName.exe") `
+            -OutputDirectory (Join-Path $output 'verification')
     }
 }
 finally {

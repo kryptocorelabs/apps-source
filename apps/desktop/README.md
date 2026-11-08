@@ -4,6 +4,10 @@ Build the graphical apps with the .NET 10 SDK, the Windows Desktop
 targeting pack and a Rust toolchain targeting Windows x64. Each app has its
 own Windows project and build script.
 
+[Standalone application checks and runtime requirements](PORTABLE.md) cover
+Vault, Messenger, Container and Rescue. Release builds now verify an EXE-only
+copy after packaging; end users do not need the development toolchains.
+
 | App | Windows source | Build from the workspace root | Executable |
 | --- | --- | --- | --- |
 | Container | [`apps/container/windows/`](../container/windows/) | `./apps/container/build-windows.ps1` | `dist/apps/container/windows-x64/KryptoCore-Container.exe` |

@@ -25,5 +25,8 @@ try {
     }
     & dotnet @publish
     if ($LASTEXITCODE -ne 0) { throw 'Building the Rescue prototype interface failed.' }
+    & (Join-Path $repository 'apps/desktop/tests/check-portable.ps1') -Product Rescue `
+        -Executable (Join-Path $output 'KryptoCore-Rescue.exe') `
+        -OutputDirectory (Join-Path $output 'verification')
 }
 finally { Pop-Location }
