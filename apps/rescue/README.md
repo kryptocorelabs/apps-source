@@ -31,6 +31,11 @@ human identity or make files safe to execute. Optional shared sender-signature
 checks and local ClamAV scanning are separate choices; OpenSSH verification
 is still handled by Container. Unknown formats and unsupported versions are rejected.
 
+In current source builds, choose **Vault-Sicherung prüfen** after selecting a
+Vault backup and entering its password or configured recovery key. Rescue
+authenticates and parses the backup in memory, then shows the readable entry
+count. This check creates no plaintext file and accepts authentic older copies.
+
 ## Windows quick start
 
 1. Download and extract the [preview ZIP](https://github.com/kryptocorelabs/rescue/releases/tag/v0.1.0-preview.3).

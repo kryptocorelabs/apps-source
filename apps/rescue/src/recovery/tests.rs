@@ -50,6 +50,56 @@ fn vault_legacy_and_recovery_slot_export_without_touching_sources() {
 }
 
 #[test]
+fn vault_backup_check_authenticates_and_never_creates_an_output() {
+    let dir = TestDirectory::new();
+    let source = dir.path().join("backup.kcv");
+    let versioned = dir.path().join("versioned.kcv");
+    kryptocore_vault_format::save(&source, PASSWORD, ENTRIES, true).unwrap();
+    let check = check_vault(&source, CredentialRoute::Password, PASSWORD).unwrap();
+    assert_eq!(check.format, Format::VaultV1);
+    assert_eq!(check.entries, 1);
+    assert!(matches!(
+        check_vault(&source, CredentialRoute::RecoveryKey, RECOVERY),
+        Err(RecoveryError::Credential)
+    ));
+
+    kryptocore_vault_format::enable_recovery(&source, PASSWORD, RECOVERY, false).unwrap();
+    kryptocore_vault_format::enable_epoch_copy(&source, &versioned, PASSWORD).unwrap();
+    for (path, format) in [(&source, Format::VaultV2), (&versioned, Format::VaultV3)] {
+        let original = fs::read(path).unwrap();
+        for (route, secret) in [
+            (CredentialRoute::Password, PASSWORD),
+            (CredentialRoute::RecoveryKey, RECOVERY),
+        ] {
+            let check = check_vault(path, route, secret).unwrap();
+            assert!(check.content_authenticated);
+            assert_eq!(check.format, format);
+            assert_eq!(check.entries, 1);
+        }
+        assert!(matches!(
+            check_vault(path, CredentialRoute::RecoveryKey, b"wrong"),
+            Err(RecoveryError::AuthenticationOrData)
+        ));
+        assert_eq!(fs::read(path).unwrap(), original);
+        let mut damaged = original;
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(path, &damaged).unwrap();
+        assert!(matches!(
+            check_vault(path, CredentialRoute::Password, PASSWORD),
+            Err(RecoveryError::AuthenticationOrData)
+        ));
+        assert_eq!(fs::read(path).unwrap(), damaged);
+    }
+    let invalid = dir.path().join("invalid.kcv");
+    kryptocore_vault_format::save(&invalid, PASSWORD, b"not JSON", true).unwrap();
+    assert!(matches!(
+        check_vault(&invalid, CredentialRoute::Password, PASSWORD),
+        Err(RecoveryError::AuthenticationOrData)
+    ));
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
+#[test]
 fn wrong_credentials_damage_and_invalid_records_never_publish_vault_output() {
     let dir = TestDirectory::new();
     let input = dir.path().join("source.kcv");

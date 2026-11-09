@@ -76,6 +76,15 @@ internal static class Program
             var destination = (TextBox)type.GetField("destination", Fields)!.GetValue(window)!;
             var consent = (CheckBox)type.GetField("plaintext", Fields)!.GetValue(window)!;
             var restore = Button("Entschlüsseln und exportieren");
+            var check = Button("Vault-Sicherung prüfen");
+            int filesBeforeCheck = root.GetFiles().Length;
+            secret.Password = "synthetic rescue fixture password";
+            if (!check.IsEnabled || restore.IsEnabled) throw new Exception("Check requires an export destination or consent");
+            check.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            Wait(() => !(bool)type.BaseType!.GetField("busy", Fields)!.GetValue(window)!);
+            if (!Text("Sicherung geprüft · 1 Eintrag lesbar") || secret.SecurePassword.Length != 0
+                || root.GetFiles().Length != filesBeforeCheck || !File.ReadAllBytes(vault).SequenceEqual(encrypted))
+                throw new Exception("Vault check retained credentials, changed files or did not authenticate the input");
             string recovered = Path.Combine(root.FullName, "recovered.json");
             secret.Password = "wrong synthetic password";
             destination.Text = recovered;

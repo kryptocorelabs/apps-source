@@ -17,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal
@@ -27,10 +27,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
       - run: rustup toolchain install stable --profile minimal
@@ -48,7 +48,7 @@ jobs:
           dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/container/windows/bin/Release/net10.0-windows/KryptoCore-Container.dll Container dist/design-screenshots
           dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll Rescue dist/design-screenshots
           dotnet apps/desktop/tests/appearance/bin/Release/net10.0-windows/Appearance.dll apps/msg/windows/bin/Release/net10.0-windows/KryptoCore-MSG.dll Msg dist/design-screenshots
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: application-design-screenshots
           path: dist/design-screenshots/*.png
@@ -65,7 +65,7 @@ jobs:
         run: |
           dotnet build apps/rescue/tests/windows/Check.csproj -o dist/rescue-ui-check
           dotnet dist/rescue-ui-check/Check.dll apps/rescue/windows/bin/Release/net10.0-windows/KryptoCore-Rescue.dll dist/container-ui-check/native-fixture.json
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
           name: rescue-ui-check
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal

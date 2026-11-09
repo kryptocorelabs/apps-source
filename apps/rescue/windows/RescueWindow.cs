@@ -22,6 +22,7 @@ internal sealed class RescueWindow : Shell
     private readonly ComboBox credential = new();
     private readonly TextBox destination = new() { IsReadOnly = true, IsUndoEnabled = false };
     private readonly CheckBox plaintext = new() { Content = "Ich weiß: Die Ausgabe enthält unverschlüsselte Daten.", Margin = new Thickness(0, 12, 0, 12) };
+    private readonly Button checkBackup;
     private readonly Button restore;
     private readonly CheckBox signed = new() { Content = "Absendersignatur prüfen (Container)", Margin = new Thickness(0, 8, 0, 6) };
     private readonly CheckBox scan = new() { Content = "Vor der Freigabe lokal mit ClamAV scannen", Margin = new Thickness(0, 8, 0, 6) };
@@ -43,6 +44,9 @@ internal sealed class RescueWindow : Shell
 
     internal RescueWindow() : base("Rescue", "Dateien prüfen · Daten unabhängig wiederherstellen")
     {
+        checkBackup = Button("Vault-Sicherung prüfen", async () => await CheckBackup());
+        checkBackup.ToolTip = "Zugang und Inhalt prüfen, ohne eine Datei zu exportieren.";
+        checkBackup.Visibility = Visibility.Collapsed;
         var source = Section("Verschlüsselte Datei untersuchen", "Die Originaldatei wird nur gelesen.");
         source.Children.Add(Text("Wähle eine Vault- oder Container-Datei. Rescue prüft zuerst das Format und rettet die Daten mit deinem vorhandenen Zugang in ein neues Ziel.", 14, true));
         Field(source, "Ausgewählte Datei", input);
@@ -75,6 +79,7 @@ internal sealed class RescueWindow : Shell
         credential.SelectedIndex = 0;
         Field(recovery, "Zugangsart", credential);
         Field(recovery, "Passwort oder Wiederherstellungsschlüssel", secret);
+        recovery.Children.Add(checkBackup);
         Field(recovery, "Neues Ziel", destination);
         recovery.Children.Add(Button("Speicherort wählen …", ChooseDestination));
         var optional = new StackPanel();
@@ -122,6 +127,7 @@ internal sealed class RescueWindow : Shell
             input.Text = path;
             report = null;
             selectedFormat = null;
+            checkBackup.Visibility = Visibility.Collapsed;
             secret.Clear();
             destination.Clear();
             plaintext.IsChecked = false;
@@ -154,6 +160,8 @@ internal sealed class RescueWindow : Shell
                     }));
                     report = reply.Text;
                     selectedFormat = result.Format;
+                    checkBackup.Visibility = VaultSelected ? Visibility.Visible : Visibility.Collapsed;
+                    UpdateRecovery();
                     signed.IsEnabled = result.Format is "container_v1" or "embedded_container_v1";
                     ((ComboBoxItem)credential.Items[1]).IsEnabled = result.Format is "vault_v2" or "vault_v3";
                     save.IsEnabled = true;
@@ -176,11 +184,13 @@ internal sealed class RescueWindow : Shell
         }
     }
 
-    private bool RecoverySupported => selectedFormat is "vault_v1" or "vault_v2" or "vault_v3" or "container_v1" or "embedded_container_v1";
+    private bool VaultSelected => selectedFormat is "vault_v1" or "vault_v2" or "vault_v3";
+    private bool RecoverySupported => VaultSelected || selectedFormat is "container_v1" or "embedded_container_v1";
 
     private void UpdateRecovery()
     {
         using var password = secret.SecurePassword;
+        checkBackup.IsEnabled = VaultSelected && password.Length > 0;
         restore.IsEnabled = RecoverySupported && password.Length > 0 && plaintext.IsChecked == true && destination.Text.Length > 0;
         if (signed.IsChecked == true && (signature.Text.Length == 0 || expectedPublic.Text.Length == 0)) restore.IsEnabled = false;
         if (scan.IsChecked == true && scanner.Text.Length == 0) restore.IsEnabled = false;
@@ -189,7 +199,7 @@ internal sealed class RescueWindow : Shell
     private void ChooseDestination()
     {
         if (!RecoverySupported) { SetStatus("Wähle zuerst eine unterstützte Vault- oder Container-Datei.", true); return; }
-        if (selectedFormat is "vault_v1" or "vault_v2" or "vault_v3")
+        if (VaultSelected)
         {
             var picker = new SaveFileDialog { Title = "Neuen unverschlüsselten Vault-Export speichern", Filter = "JSON-Datei (*.json)|*.json",
                 FileName = "KryptoCore-Vault-Rettung.json", OverwritePrompt = false };
@@ -200,6 +210,33 @@ internal sealed class RescueWindow : Shell
             var picker = new OpenFolderDialog { Title = "Geschützten Ordner für die geretteten Dateien wählen" };
             if (picker.ShowDialog(this) == true)
                 destination.Text = Path.Combine(picker.FolderName, "KryptoCore-Rettung-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        }
+    }
+
+    private async Task CheckBackup()
+    {
+        if (selected is not { } source || !checkBackup.IsEnabled) return;
+        string? format = selectedFormat;
+        string route = (string)((ComboBoxItem)credential.SelectedItem).Tag;
+        state.Text = "Sicherung wird geprüft …";
+        state.Foreground = Brush("Muted");
+        bool ok = await Run("Vault-Sicherung wird geprüft …", token =>
+            Engine.WithPassword(new { action = "check_vault", input = source, credential = route }, secret, cancellation: token),
+            reply =>
+            {
+                using var summary = JsonDocument.Parse(reply.Text ?? "");
+                var data = summary.RootElement;
+                if (data.GetProperty("schema_version").GetInt32() != 1 || !data.GetProperty("content_authenticated").GetBoolean()
+                    || data.GetProperty("format").GetString() != format) throw new JsonException();
+                int count = data.GetProperty("entries").GetInt32();
+                state.Text = $"Sicherung geprüft · {count:N0} {(count == 1 ? "Eintrag" : "Einträge")} lesbar";
+                state.Foreground = Brush("Mint");
+                SetStatus("Zugang und Inhalt geprüft. Es wurde keine Datei exportiert.");
+            });
+        if (!ok)
+        {
+            state.Text = "Sicherung konnte nicht bestätigt werden.";
+            state.Foreground = Brush("Problem");
         }
     }
 

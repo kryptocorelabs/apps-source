@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kryptocore_rescue::{inspect, recover_with_options, CredentialRoute, RecoveryOptions};
+use kryptocore_rescue::{check_vault, inspect, recover_with_options, CredentialRoute, RecoveryOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -16,6 +16,10 @@ use zeroize::Zeroizing;
 enum Request {
     Inspect {
         input: PathBuf,
+    },
+    CheckVault {
+        input: PathBuf,
+        credential: CredentialRoute,
     },
     Recover {
         input: PathBuf,
@@ -73,6 +77,11 @@ fn run(action: Request, secret: &[u8]) -> Result<Value, String> {
                 json!({"ok":true,"message":"Format marker inspected. Contents are not authenticated.",
                 "text":serde_json::to_string(&result).expect("inspection metadata")}),
             )
+        }
+        Request::CheckVault { input, credential } => {
+            let result = check_vault(&input, credential, secret).map_err(|e| e.to_string())?;
+            Ok(json!({"ok":true,"message":"Vault backup authenticated. No export was created.",
+                "text":serde_json::to_string(&result).expect("vault backup check")}))
         }
         Request::Recover {
             input,

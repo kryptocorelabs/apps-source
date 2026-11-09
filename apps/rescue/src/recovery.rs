@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::{fs, io::Write, path::Path};
 use tempfile::NamedTempFile;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum RecoveryError {
@@ -51,12 +52,67 @@ pub struct RecoverySummary {
     pub malware_scan: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+pub struct VaultCheck {
+    pub schema_version: u8,
+    pub format: Format,
+    pub content_authenticated: bool,
+    pub entries: usize,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryOptions {
     pub signature: Option<PathBuf>,
     pub expected_public: Option<String>,
     pub scanner: Option<PathBuf>,
+}
+
+/// Authenticate and parse a Vault backup with its existing credential.
+/// Return only the record count and format. No plaintext file is created.
+pub fn check_vault(
+    input: &Path,
+    route: CredentialRoute,
+    secret: &[u8],
+) -> Result<VaultCheck, RecoveryError> {
+    if secret.is_empty() || secret.len() > 1024 {
+        return Err(RecoveryError::Credential);
+    }
+    let source = inspect(input).map_err(|_| RecoveryError::InvalidSource)?;
+    let (_, entries) = read_vault(input, source.format, route, secret)?;
+    Ok(VaultCheck {
+        schema_version: 1,
+        format: source.format,
+        content_authenticated: true,
+        entries,
+    })
+}
+
+fn read_vault(
+    input: &Path,
+    format: Format,
+    route: CredentialRoute,
+    secret: &[u8],
+) -> Result<(Zeroizing<Vec<u8>>, usize), RecoveryError> {
+    let version = match format {
+        Format::VaultV1 => 1,
+        Format::VaultV2 => 2,
+        Format::VaultV3 => 3,
+        _ => return Err(RecoveryError::Unsupported),
+    };
+    let recovery = match route {
+        CredentialRoute::Password => false,
+        CredentialRoute::RecoveryKey if version >= 2 => true,
+        _ => return Err(RecoveryError::Credential),
+    };
+    let (plaintext, metadata) = kryptocore_vault_format::open_with_metadata(input, secret, recovery)
+        .map_err(|_| RecoveryError::AuthenticationOrData)?;
+    if metadata.format_version != version {
+        return Err(RecoveryError::AuthenticationOrData);
+    }
+    let records: Vec<kryptocore_vault_format::Login> =
+        serde_json::from_slice(&plaintext).map_err(|_| RecoveryError::AuthenticationOrData)?;
+    Ok((plaintext, records.len()))
 }
 
 /// Authenticate with the original format reader, then publish a fresh plaintext
@@ -144,17 +200,7 @@ pub fn recover_with_options(
     }
     let (entries, bytes) = match source.format {
         Format::VaultV1 | Format::VaultV2 | Format::VaultV3 => {
-            let plaintext = match route {
-                CredentialRoute::Password => kryptocore_vault_format::open(input, secret),
-                CredentialRoute::RecoveryKey => {
-                    kryptocore_vault_format::open_with_recovery(input, secret)
-                }
-                _ => return Err(RecoveryError::Credential),
-            }
-            .map_err(|_| RecoveryError::AuthenticationOrData)?;
-            let records: Vec<kryptocore_vault_format::Login> =
-                serde_json::from_slice(&plaintext)
-                    .map_err(|_| RecoveryError::AuthenticationOrData)?;
+            let (plaintext, entries) = read_vault(input, source.format, route, secret)?;
             let mut temporary =
                 NamedTempFile::new_in(parent).map_err(|_| RecoveryError::WriteFailed)?;
             temporary
@@ -168,7 +214,7 @@ pub fn recover_with_options(
             temporary
                 .persist_noclobber(output)
                 .map_err(|_| RecoveryError::WriteFailed)?;
-            (records.len(), plaintext.len() as u64)
+            (entries, plaintext.len() as u64)
         }
         Format::ContainerV1 | Format::EmbeddedContainerV1 => {
             let result = kryptocore_container::unpack_protected(
