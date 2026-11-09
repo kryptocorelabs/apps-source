@@ -2,6 +2,7 @@
 name = "kryptocore-desktop-engine"
 version = "0.1.0-alpha.1"
 edition = "2021"
+license = "MIT"
 publish = false
 
 [dependencies]
