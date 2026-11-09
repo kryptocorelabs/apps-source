@@ -21,15 +21,16 @@ privately through the project's security-reporting channel.
 | MSG | [apps/msg](apps/msg/README.md) | [MSG](https://github.com/kryptocorelabs/msg) |
 | Container | [apps/container](apps/container/README.md) | [Container](https://github.com/kryptocorelabs/container) |
 | Rescue | [apps/rescue](apps/rescue/README.md) | [Rescue](https://github.com/kryptocorelabs/rescue) |
-| Verify | [apps/verify](apps/verify/README.md) | Native CI artifacts; no official release key provisioned yet |
+| Verify | [apps/verify](apps/verify/README.md) | Native CI artifacts and a published release-verification key |
 | Shared Windows UI/worker | [apps/desktop](apps/desktop/README.md) | Included in the app packages |
 
 Vault and Firefox sources are in the separate
 [vault-source](https://github.com/kryptocorelabs/vault-source) workspace.
-The [Core](https://github.com/kryptocorelabs/kryptocore) and its optional signature
-companion are the canonical upstream security components. This workspace keeps
-MIT-licensed copies for self-contained application builds. Changes to mirrored
-components should be coordinated with their upstream rather than silently diverge.
+Cargo resolves the [Core](https://github.com/kryptocorelabs/kryptocore) and
+[Vault format](https://github.com/kryptocorelabs/vault-source/tree/main/modules/vault-format)
+from exact public Git revisions recorded in the workspace manifest and lockfile.
+Update both pins together when the format crate changes its Core revision.
+The optional signature companion has its own crate in this workspace.
 
 ## Build and test
 
@@ -39,7 +40,8 @@ cd apps-source
 cargo test --workspace --locked --release
 ```
 
-Install stable Rust first; Windows MSVC needs C++ build tools and the Windows SDK.
+Install stable Rust first. A first build fetches the locked dependencies. Windows
+MSVC needs C++ build tools and the Windows SDK.
 Rust tests run on Windows, Linux and macOS. The WPF graphical apps and single-file
 packaging require Windows x64, the .NET 10 SDK and the desktop targeting pack.
 See [desktop builds](apps/desktop/README.md) and

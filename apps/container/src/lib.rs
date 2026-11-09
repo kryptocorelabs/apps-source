@@ -135,7 +135,8 @@ fn begin_read(reader: &mut impl Read, passphrase: &[u8]) -> Result<Decryptor> {
     let wrap_nonce = read_array::<24>(reader)?;
     let wrapped = read_array::<48>(reader)?;
     let wrap_key = kryptocore::derive_key(passphrase, &salt).map_err(|_| Error::Crypto)?;
-    let data_key = kryptocore::decrypt(&wrap_key, &wrap_nonce, &wrapped, &wrap_aad(&salt, &nonce))
+    let data_key: Zeroizing<Vec<u8>> =
+        kryptocore::decrypt(&wrap_key, &wrap_nonce, &wrapped, &wrap_aad(&salt, &nonce))
         .map_err(|_| Error::Authentication)?;
     let key: &[u8; 32] = data_key.as_slice().try_into().map_err(|_| Error::Crypto)?;
     Ok(Decryptor::new(key.into(), (&nonce).into()))

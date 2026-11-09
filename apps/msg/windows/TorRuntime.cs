@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -72,7 +73,16 @@ internal sealed class TorRuntime(string? dataRoot = null) : IOnionTransport, IDi
                 start.ArgumentList.Add("--DisableNetwork");
                 start.ArgumentList.Add("1");
             }
-            process = Process.Start(start) ?? throw new IOException("Tor konnte nicht gestartet werden.");
+            // Hold the verified file open without write or delete sharing until Windows starts it.
+            using (var expected = typeof(TorRuntime).Assembly.GetManifestResourceStream("kryptocore-tor.sha256")
+                ?? throw new IOException("Die Prüfsumme für das eingebettete Tor fehlt."))
+            using (var digest = new StreamReader(expected, Encoding.ASCII))
+            using (var executable = new FileStream(binary, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true))
+            {
+                await VerifyExecutableAsync(executable, (await digest.ReadToEndAsync(token)).Trim(), token);
+                token.ThrowIfCancellationRequested();
+                process = Process.Start(start) ?? throw new IOException("Tor konnte nicht gestartet werden.");
+            }
             _ = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
             _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
 
@@ -168,6 +178,13 @@ internal sealed class TorRuntime(string? dataRoot = null) : IOnionTransport, IDi
             ?? throw new IOException("Diese MSG-Ausgabe enthält Tor noch nicht.");
         using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 8192, useAsync: true);
         await resource.CopyToAsync(output, token);
+    }
+
+    internal static async Task VerifyExecutableAsync(Stream executable, string expected, CancellationToken token)
+    {
+        string actual = Convert.ToHexString(await SHA256.HashDataAsync(executable, token));
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            throw new IOException("Die Prüfsumme des eingebetteten Tor-Programms stimmt nicht. Tor wurde nicht gestartet.");
     }
 
     internal static bool IsHostname(string value) =>

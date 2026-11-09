@@ -8,6 +8,7 @@
   <ItemGroup>
     <Resource Include="Assets/messenger.png" />
     <Resource Include="$(ApplicationIcon)" />
+    <EmbeddedResource Include="tor-bundle.sha256" LogicalName="kryptocore-tor.sha256" />
   </ItemGroup>
   <ItemGroup Condition="'$(TorBundleRoot)' != ''">
     <EmbeddedResource Include="$(TorBundleRoot)/tor/tor.exe" LogicalName="kryptocore-tor.exe" />

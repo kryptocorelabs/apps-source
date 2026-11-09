@@ -10,7 +10,7 @@ description = "Offline authenticated recovery exports for KryptoCore application
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-kryptocore-vault-format = { path = "../../modules/vault-format" }
+kryptocore-vault-format = { workspace = true }
 kryptocore-container = { path = "../container" }
 tempfile = "3"
 zeroize = "1"

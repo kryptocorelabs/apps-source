@@ -6,6 +6,7 @@ pub enum Format {
     VaultV1,
     VaultV2,
     VaultV3,
+    VaultV4,
     ContainerV1,
     EmbeddedContainerV1,
     MsgIdentityV1,
@@ -46,6 +47,14 @@ pub(crate) fn identify(header: &[u8]) -> Option<Descriptor> {
             (
                 VaultV3,
                 "Vault / KCV3",
+                245,
+                4 * 1024 * 1024,
+                &[Password, RecoveryKey],
+            )
+        } else if header.starts_with(b"KCV4\0") {
+            (
+                VaultV4,
+                "Vault / KCV4",
                 245,
                 4 * 1024 * 1024,
                 &[Password, RecoveryKey],

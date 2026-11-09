@@ -31,10 +31,10 @@ prints `NOT VERIFIED`. The public key is mandatory. A key downloaded beside a
 possibly substituted executable does not establish trust. The verifier itself
 also needs a trusted distribution/bootstrap route.
 
-**No official KryptoCoreLabs release key has been provisioned yet.** Existing
-public release downloads do not automatically gain signatures through this tool.
-Until a dedicated key has been created, its ownership independently established,
-and matching manifests published, do not claim existing binaries are authenticated.
+KryptoCoreLabs publishes its [release verification key](https://github.com/kryptocorelabs/kryptocore/blob/main/PUBLIC_RELEASE_KEY.txt).
+Use the release's matching detached manifest and signature and confirm the key
+through a trusted route. The [download guide](https://github.com/kryptocorelabs/kryptocore/blob/main/VERIFY-DOWNLOADS.md)
+covers available checks and the trust limits of older archives.
 
 ## Maintainer signing
 

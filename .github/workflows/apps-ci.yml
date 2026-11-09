@@ -57,6 +57,8 @@ jobs:
         run: |
           dotnet build apps/msg/tests/windows/Check.csproj -o dist/msg-ui-check
           dotnet dist/msg-ui-check/Check.dll --session-only
+      - name: Test bundled Tor integrity check
+        run: dotnet dist/msg-ui-check/Check.dll --tor-integrity apps/msg/windows/bin/Release/net10.0-windows/KryptoCore-MSG.dll
       - name: Test Container shared signatures and scanner gates
         run: |
           dotnet build apps/container/tests/windows/Check.csproj -o dist/container-ui-check
@@ -80,6 +82,14 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal
+      - name: Check the shared dependency graph
+        run: |
+          cargo +stable metadata --locked --format-version 1 | jq -e '
+            [.packages[] | select(.name == "kryptocore") | .source] as $core |
+            [.packages[] | select(.name == "kryptocore-vault-format") | .source] as $format |
+            ($core | length) == 1 and ($format | length) == 1 and
+            ($core[0] | startswith("git+https://github.com/kryptocorelabs/kryptocore?rev=")) and
+            ($format[0] | startswith("git+https://github.com/kryptocorelabs/vault-source?rev="))'
       - run: cargo +stable install --locked cargo-audit --version 0.22.2
       - run: cargo +stable audit --deny warnings
       - run: cargo +stable install --locked cargo-deny --version 0.19.9

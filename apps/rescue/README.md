@@ -21,6 +21,7 @@ privately through the project's security-reporting channel.
 | Vault KCV1 | Authenticate and export login records as a new JSON file. | Vault password. |
 | Vault KCV2 | Same export, using either existing access slot. | Vault password or previously configured recovery key. |
 | Vault KCV3 (unreleased) | Same read-only export; no claim that a backup is current. Published preview.3 lacks this reader. | Password or matching recovery key. |
+| Vault KCV4 (development) | Authenticate, check or export through the same shared format crate as Vault. | Password or matching recovery key. |
 | Container KCC v1 | Authenticate the complete archive and extract into a new folder. | Container passphrase. |
 | Embedded KCC in an EXE | Read the payload as data and extract into a new folder. The EXE is never launched. | Container passphrase. |
 | MSG identity/sidecar | Recognize the marker and size bounds only. | Authenticated MSG recovery is not implemented. |

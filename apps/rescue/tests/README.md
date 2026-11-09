@@ -39,7 +39,8 @@ exports, unchanged original ciphertext, wrong credentials, malformed records,
 tampering, mandatory plaintext confirmation and refusal to overwrite.
 Ordinary and executable-wrapped KCC extraction uses the existing reader and
 tests final-tag failure cleanup. Vault's six original format tests remain in
-`modules/vault-format`; run them with `-p kryptocore-vault-format`.
+the [canonical Vault workspace](https://github.com/kryptocorelabs/vault-source).
+Run them there with `-p kryptocore-vault-format`.
 
 The Windows check uses a synthetic KCV1 fixture generated with the Python
 reference/PyNaCl, with password `synthetic rescue fixture password`. It checks

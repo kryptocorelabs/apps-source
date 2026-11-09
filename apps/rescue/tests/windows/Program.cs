@@ -44,12 +44,15 @@ internal static class Program
                 throw new Exception("Unexpected diagnostic disclosure or access claim");
             if (!File.ReadAllBytes(source).SequenceEqual(bytes) || root.GetFiles().Length != 1) throw new Exception("Inspection changed sources");
             var epochMarker = new byte[245];
-            Encoding.ASCII.GetBytes("KCV3\0").CopyTo(epochMarker, 0);
-            File.WriteAllBytes(source, epochMarker);
-            Inspect(source);
             var recoveryChoice = Elements(window).OfType<ComboBoxItem>().Single(x => Equals(x.Tag, "recovery_key"));
-            if (!Text("Vault / KCV3") || !recoveryChoice.IsEnabled || !Text("Inhalte sind nicht authentifiziert."))
-                throw new Exception("KCV3 recognition or recovery credential choice failed");
+            foreach (var profile in new[] { "KCV3", "KCV4" })
+            {
+                Encoding.ASCII.GetBytes(profile + "\0").CopyTo(epochMarker, 0);
+                File.WriteAllBytes(source, epochMarker);
+                Inspect(source);
+                if (!Text($"Vault / {profile}") || !recoveryChoice.IsEnabled || !Text("Inhalte sind nicht authentifiziert."))
+                    throw new Exception($"{profile} recognition or recovery credential choice failed");
+            }
             File.WriteAllBytes(source, bytes);
             Inspect(source);
             Render(window);

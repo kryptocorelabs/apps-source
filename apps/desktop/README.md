@@ -14,9 +14,11 @@ copy after packaging; end users do not need the development toolchains.
 | MSG | [`apps/msg/windows/`](../msg/windows/) | `./apps/msg/build-windows.ps1 -TorBundleRoot <path>` | `dist/apps/msg/windows-x64/KryptoCore-MSG.exe` |
 
 For MSG, use the extracted official Windows x64 Tor Expert Bundle 16.0.
-The default path is `dist/msg-tor-setup`. The build verifies the Tor executable
-against the pinned SHA-256 hash. To build both apps, run
-`./apps/desktop/build-windows.ps1`.
+The default path is `dist/msg-tor-setup`. The build and runtime use the same
+[pinned SHA-256 digest](../msg/windows/tor-bundle.sha256). MSG checks the
+extracted executable before each launch. For a Tor update, verify the new
+bundle's Tor Project signature before changing the pin, rebuild MSG, and run
+its portable check. To build both apps, run `./apps/desktop/build-windows.ps1`.
 
 Each Windows x64 executable
 contains its own .NET Desktop Runtime and Rust engine. You can copy either

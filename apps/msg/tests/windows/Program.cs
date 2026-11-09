@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
@@ -14,6 +15,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args is ["--tor-integrity", var assemblyPath])
+        {
+            CheckTorIntegrity(assemblyPath);
+            return;
+        }
         SessionChecks.Run();
         if (args is ["--session-only"]) return;
         var app = new Application();
@@ -276,6 +282,29 @@ internal static class Program
             var closure = Closure(w);
             return (Task)closure.GetType().GetMethods(Fields).Single(m => m.Name.Contains("g__SendAsync|")).Invoke(closure, [path])!;
         }
+    }
+
+    private static void CheckTorIntegrity(string assemblyPath)
+    {
+        var assembly = Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+        var runtime = assembly.GetType("KryptoCore.Desktop.TorRuntime", true)!;
+        var verify = runtime.GetMethod("VerifyExecutableAsync", BindingFlags.Static | BindingFlags.NonPublic)!
+            .CreateDelegate<Func<Stream, string, CancellationToken, Task>>();
+        using var pin = assembly.GetManifestResourceStream("kryptocore-tor.sha256")
+            ?? throw new Exception("Tor integrity pin was not embedded");
+        using var digest = new StreamReader(pin, Encoding.ASCII);
+        if (Convert.FromHexString(digest.ReadToEnd().Trim()).Length != 32)
+            throw new Exception("Invalid Tor SHA-256 pin");
+
+        byte[] bytes = Encoding.ASCII.GetBytes("synthetic Tor executable bytes");
+        string expected = Convert.ToHexString(SHA256.HashData(bytes));
+        using var original = new MemoryStream(bytes);
+        verify(original, expected, CancellationToken.None).GetAwaiter().GetResult();
+        bytes[0] ^= 1;
+        using var changed = new MemoryStream(bytes);
+        try { verify(changed, expected, CancellationToken.None).GetAwaiter().GetResult(); }
+        catch (IOException) { return; }
+        throw new Exception("Modified Tor executable passed verification");
     }
 
     private static Window Prompt(Window owner, string title)

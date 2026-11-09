@@ -98,6 +98,7 @@ fn read_vault(
         Format::VaultV1 => 1,
         Format::VaultV2 => 2,
         Format::VaultV3 => 3,
+        Format::VaultV4 => 4,
         _ => return Err(RecoveryError::Unsupported),
     };
     let recovery = match route {
@@ -175,6 +176,7 @@ pub fn recover_with_options(
         Format::VaultV1
             | Format::VaultV2
             | Format::VaultV3
+            | Format::VaultV4
             | Format::ContainerV1
             | Format::EmbeddedContainerV1
     ) {
@@ -199,7 +201,7 @@ pub fn recover_with_options(
         return Err(RecoveryError::InvalidDestination);
     }
     let (entries, bytes) = match source.format {
-        Format::VaultV1 | Format::VaultV2 | Format::VaultV3 => {
+        Format::VaultV1 | Format::VaultV2 | Format::VaultV3 | Format::VaultV4 => {
             let (plaintext, entries) = read_vault(input, source.format, route, secret)?;
             let mut temporary =
                 NamedTempFile::new_in(parent).map_err(|_| RecoveryError::WriteFailed)?;

@@ -100,6 +100,29 @@ fn vault_backup_check_authenticates_and_never_creates_an_output() {
 }
 
 #[test]
+fn vault_kcv4_from_canonical_writer_checks_and_exports_through_both_slots() {
+    let dir = TestDirectory::new();
+    let input = dir.path().join("fresh.kcv");
+    kryptocore_vault_format::create_with_recovery_v4(&input, PASSWORD, RECOVERY, ENTRIES).unwrap();
+    let original = fs::read(&input).unwrap();
+    assert!(original.starts_with(b"KCV4\0"));
+    for (name, route, secret) in [
+        ("password.json", CredentialRoute::Password, PASSWORD),
+        ("recovery.json", CredentialRoute::RecoveryKey, RECOVERY),
+    ] {
+        let checked = check_vault(&input, route, secret).unwrap();
+        assert_eq!(checked.format, Format::VaultV4);
+        assert_eq!(checked.entries, 1);
+        let output = dir.path().join(name);
+        let exported = recover(&input, &output, route, secret, true).unwrap();
+        assert_eq!(exported.format, Format::VaultV4);
+        assert!(exported.content_authenticated);
+        assert_eq!(fs::read(output).unwrap(), ENTRIES);
+    }
+    assert_eq!(fs::read(&input).unwrap(), original);
+}
+
+#[test]
 fn wrong_credentials_damage_and_invalid_records_never_publish_vault_output() {
     let dir = TestDirectory::new();
     let input = dir.path().join("source.kcv");

@@ -7,7 +7,7 @@ publish = false
 description = "Offline verification of purpose-bound signed release manifests"
 
 [dependencies]
-kryptocore = { path = "../.." }
+kryptocore = { workspace = true }
 kryptocore-signatures = { path = "../../modules/signatures" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

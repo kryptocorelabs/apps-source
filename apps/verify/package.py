@@ -45,6 +45,6 @@ digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 (output / 'BUILD-MANIFEST.json').write_text(json.dumps(dict(
     source_commit=os.environ.get('GITHUB_SHA', 'local-working-tree'), target=target,
     version='0.1.0-preview.1', archive=archive.name, sha256=digest,
-    publisher_signed=False, official_release_key_provisioned=False,
+    publisher_signed=False, official_release_key_provisioned=True,
     windows_crt_static=system == 'windows'), indent=2) + '\n', encoding='utf-8')
 print('Packaged:', archive)

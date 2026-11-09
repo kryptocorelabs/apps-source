@@ -39,8 +39,9 @@ try {
         )
         if ($product -eq 'Msg') {
             $tor = (Resolve-Path -LiteralPath $TorBundleRoot).Path
+            $expectedHash = [IO.File]::ReadAllText((Join-Path $repository 'apps/msg/windows/tor-bundle.sha256')).Trim()
             $hash = (Get-FileHash -LiteralPath (Join-Path $tor 'tor/tor.exe') -Algorithm SHA256).Hash
-            if ($hash -ne '1607D98F5D13859077B1B349C55BEBA76B09ACC788F0431FD824D11966FB1074') {
+            if ($hash -cne $expectedHash) {
                 throw 'Expected the verified Windows x64 Tor Expert Bundle 16.0 binary. Verify and update the pinned hash before changing versions.'
             }
             $publish += "-p:TorBundleRoot=$tor"

@@ -22,7 +22,7 @@ readers, not an independent cryptographic implementation or a bypass.
    and your backups. If a file looks damaged, keep it rather than overwriting it.
 2. Open **KryptoCore-Rescue.exe** on a trusted Windows computer. Choose
    **Datei auswählen …** (Choose file) and select the working copy.
-3. Choose **Passwort** (Password). For KCV2/KCV3, you may instead select
+3. Choose **Passwort** (Password). For KCV2 through KCV4, you may instead select
    **Wiederherstellungsschlüssel** (Recovery key) and enter the matching key
    from your emergency sheet. KCV1 does not have that recovery slot.
 4. Choose **Speicherort wählen …** (Choose destination) and a new local JSON
@@ -41,8 +41,8 @@ refuses to overwrite an existing destination. A recognized file marker alone
 is not successful authentication. If export fails, keep the source untouched
 and try another known-good backup copy with its matching credentials.
 
-KCV3 requires the unreleased KCV3-capable Rescue build; the published preview.3
-download does not support it. Rescue intentionally accepts authentic older backups
+KCV3 and KCV4 require a development Rescue build with the shared reader. The
+published preview.3 download supports KCV1 and KCV2. Rescue intentionally accepts authentic older backups
 and does not enforce the separate Vault GUI high-water mark.
 
 ## Container: get your files out
