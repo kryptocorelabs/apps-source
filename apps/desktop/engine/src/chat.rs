@@ -1,4 +1,5 @@
 use super::{emit_progress, msg, msg_error, read_frame, Outcome, Target};
+use msg::transport::OnionTransport;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -164,7 +165,7 @@ fn connect(
     peer: &msg::PublicKey,
     target: Target,
     local: SocketAddr,
-    socks_port: Option<u16>,
+    onion: Option<&dyn OnionTransport>,
     stopped: &AtomicBool,
 ) -> Result<msg::chat::Channel, String> {
     // Both sides choose the same direction independently, even on simultaneous opens.
@@ -204,7 +205,9 @@ fn connect(
             (None, Target::Direct(address)) => {
                 TcpStream::connect_timeout(address, Duration::from_secs(3))
             }
-            (None, Target::Onion(address)) => address.connect(socks_port.unwrap_or(0), || {}),
+            (None, Target::Onion(address)) => onion
+                .ok_or("Der lokale Tor-Dienst wurde noch nicht gestartet.")?
+                .connect(address, &mut || {}),
         };
         if let Ok(stream) = stream {
             if let Ok(channel) = msg::chat::Channel::open(stream, identity, peer, dial) {
@@ -221,7 +224,7 @@ pub(super) fn run(
     peer: msg::PublicKey,
     target: Target,
     local: SocketAddr,
-    socks_port: Option<u16>,
+    onion: Option<&dyn OnionTransport>,
 ) -> Result<Outcome, String> {
     let (sender, commands) = mpsc::sync_channel(1);
     let stopped = Arc::new(AtomicBool::new(false));
@@ -236,7 +239,7 @@ pub(super) fn run(
         input_closed.store(true, Ordering::Release);
     });
     let channel = Arc::new(connect(
-        &identity, &peer, target, local, socks_port, &stopped,
+        &identity, &peer, target, local, onion, &stopped,
     )?);
     drop(identity);
     let folder = Arc::new(Mutex::new(None));

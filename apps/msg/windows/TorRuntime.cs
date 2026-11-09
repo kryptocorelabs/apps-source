@@ -8,9 +8,8 @@ using System.Text.RegularExpressions;
 
 namespace KryptoCore.Desktop;
 
-internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
+internal sealed class TorRuntime(string? dataRoot = null) : IOnionTransport, IDisposable
 {
-    internal const int OnionPort = 49424;
     private const int PresencePort = 49425;
     private const int ContactRequestPort = 49426;
     private static readonly Regex Bootstrap = new(@"(?:^| )PROGRESS=(\d{1,3})(?: |$)", RegexOptions.CultureInvariant);
@@ -19,12 +18,18 @@ internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
     private DirectoryInfo? scratch;
     private Process? process;
     private ControlConnection? control;
-    private Endpoint? ready;
+    private OnionEndpoint? ready;
     private string? pendingService;
 
-    internal sealed record Endpoint(int SocksPort, string OnionAddress);
+    Task<OnionEndpoint> IOnionTransport.StartAsync(Action<int>? onProgress, CancellationToken cancellation)
+        => StartAsync(onProgress, cancellation);
 
-    internal async Task<Endpoint> StartAsync(Action<int>? onProgress, CancellationToken cancellation,
+    Task<OnionEndpoint> IOnionTransport.RotateAsync(CancellationToken cancellation)
+        => RotateAsync(cancellation);
+
+    void IOnionTransport.Stop() => Dispose();
+
+    internal async Task<OnionEndpoint> StartAsync(Action<int>? onProgress, CancellationToken cancellation,
         bool connectToNetwork = true)
     {
         if (ready is { } existing && process is { HasExited: false }) return existing;
@@ -54,7 +59,7 @@ internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
             foreach (string argument in new[]
             {
                 "-f", config, "--DataDirectory", data, "--HiddenServiceDir", service,
-                "--HiddenServicePort", $"{OnionPort} 127.0.0.1:{OnionPort}",
+                "--HiddenServicePort", $"{OnionEndpoint.ChatPort} 127.0.0.1:{OnionEndpoint.ChatPort}",
                 "--HiddenServicePort", $"{PresencePort} 127.0.0.1:{PresencePort}",
                 "--HiddenServicePort", $"{ContactRequestPort} 127.0.0.1:{ContactRequestPort}",
                 "--SocksPort", "auto ExtendedErrors", "--ControlPort", "auto", "--ControlPortWriteToFile", portFile,
@@ -93,7 +98,7 @@ internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
                     int port = FindSocksPort(values.GetValueOrDefault("net/listeners/socks"));
                     if (port != 0 || !connectToNetwork)
                     {
-                        ready = new Endpoint(port, $"{onion}:{OnionPort}");
+                        ready = new OnionEndpoint(port, $"{onion}:{OnionEndpoint.ChatPort}");
                         return ready;
                     }
                 }
@@ -122,7 +127,7 @@ internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
         throw new IOException("Die gespeicherte Auswahl der Tor-Adresse ist beschädigt.");
     }
 
-    internal async Task<Endpoint> RotateAsync(CancellationToken token, bool connectToNetwork = true)
+    internal async Task<OnionEndpoint> RotateAsync(CancellationToken token, bool connectToNetwork = true)
     {
         Dispose();
         pendingService = $"onion-{Guid.NewGuid():N}";
@@ -130,7 +135,7 @@ internal sealed class TorRuntime(string? dataRoot = null) : IDisposable
         string staged = Path.Combine(profile, $"{pendingService}.selection");
         try
         {
-            Endpoint endpoint = await StartAsync(null, token, connectToNetwork);
+            OnionEndpoint endpoint = await StartAsync(null, token, connectToNetwork);
             await File.WriteAllTextAsync(staged, pendingService, token);
             token.ThrowIfCancellationRequested();
             File.Move(staged, selection, overwrite: true);

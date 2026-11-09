@@ -6,6 +6,10 @@ use msg::contact::{
     decode_invitation, encode_invitation, format_key, parse_key, Contact, Target, INVITE_PREFIX,
     OPEN_INVITE_PREFIX, SEALED_PREFIX,
 };
+use msg::{
+    tor::SocksOnionTransport,
+    transport::{OnionTarget, OnionTransport},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, IsTerminal, Read, Write},
@@ -564,8 +568,8 @@ fn manage_contacts(
 fn run_presence(
     identity: msg::Identity,
     peer: msg::PublicKey,
-    target: msg::tor::OnionTarget,
-    socks_port: u16,
+    target: OnionTarget,
+    onion: impl OnionTransport + Send + 'static,
 ) -> Result<Outcome, String> {
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], msg::presence::PORT)))
         .map_err(|_| "Der lokale Statusdienst ist bereits belegt.")?;
@@ -581,10 +585,11 @@ fn run_presence(
     let identity = Arc::new(identity);
     let probe_identity = Arc::clone(&identity);
     let probe_stopped = Arc::clone(&stopped);
+    let target = target.with_port(msg::presence::PORT);
     emit_progress(true, "presence_ready");
     std::thread::spawn(move || {
         while !probe_stopped.load(Ordering::Relaxed) {
-            let online = target.connect_presence(socks_port).is_ok_and(|mut stream| {
+            let online = onion.connect_presence(&target).is_ok_and(|mut stream| {
                 msg::presence::check(&mut stream, &probe_identity, &peer).is_ok()
             });
             if !probe_stopped.load(Ordering::Relaxed) {
@@ -865,11 +870,12 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             }
             first.zeroize();
             let peer = parse_key(&peer).map_err(msg_error)?;
-            let target: msg::tor::OnionTarget = address.parse().map_err(msg_error)?;
+            let target: OnionTarget = address.parse().map_err(msg_error)?;
             let own_address = own_address.parse().map_err(msg_error)?;
             let ticket = ticket_from_wire(second)?;
             emit_progress(true, "connecting");
-            let mut stream = target.connect(socks_port, || emit_progress(true, "tor_retry"))
+            let mut stream = SocksOnionTransport::new(socks_port)
+                .connect(&target, &mut || emit_progress(true, "tor_retry"))
                 .map_err(|_| "Die Einladung ist nicht erreichbar. Die andere Person muss auf „Auf Annahme warten“ klicken.")?;
             emit_progress(true, "handshake");
             msg::pairing::join(&mut stream, &identity, &peer, &ticket, &own_address)
@@ -895,7 +901,13 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             if msg::ContactBook::require_two_codes(&path, &identity).map_err(msg_error)? {
                 return Err("Diese Identität verlangt zwei Kontaktcodes.".into());
             }
-            contact_request::send(&identity, &address, &own_address, socks_port)
+            let onion = (socks_port != 0).then(|| SocksOnionTransport::new(socks_port));
+            contact_request::send(
+                &identity,
+                &address,
+                &own_address,
+                onion.as_ref().map(|transport| transport as &dyn OnionTransport),
+            )
         }
         Request::Contacts { path, update } => manage_contacts(&path, first, update),
         Request::BlockedContacts { path, remove } => {
@@ -918,7 +930,7 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             if identity.public() == peer || socks_port == 0 {
                 return Err("Wähle einen bestätigten Kontakt und starte Tor.".into());
             }
-            run_presence(identity, peer, target, socks_port)
+            run_presence(identity, peer, target, SocksOnionTransport::new(socks_port))
         }
         Request::Chat {
             path,
@@ -941,7 +953,14 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             {
                 return Err("Prüfe den Kontaktcode und die Verbindungseinstellungen.".into());
             }
-            chat::run(identity, peer, target, local, socks_port)
+            let onion = socks_port.filter(|port| *port != 0).map(SocksOnionTransport::new);
+            chat::run(
+                identity,
+                peer,
+                target,
+                local,
+                onion.as_ref().map(|transport| transport as &dyn OnionTransport),
+            )
         }
         Request::Send {
             path,
@@ -967,9 +986,11 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
             let mut stream = match target {
                 Target::Direct(address) => TcpStream::connect_timeout(&address, Duration::from_secs(10))
                     .map_err(|_| "Gegenstelle nicht erreichbar. Prüfe Zieladresse, Port und ob der Empfang läuft.")?,
-                Target::Onion(address) => address.connect(
+                Target::Onion(address) => SocksOnionTransport::new(
                     socks_port.filter(|port| *port != 0).ok_or("Der lokale Tor-Dienst wurde noch nicht gestartet.")?,
-                    || emit_progress(progress, "tor_retry"),
+                ).connect(
+                    &address,
+                    &mut || emit_progress(progress, "tor_retry"),
                 ).map_err(|error| match error.kind() {
                     io::ErrorKind::InvalidData => "Tor meldet eine ungültige Zieladresse. Öffne einen frisch erstellten Code der Gegenstelle.",
                     io::ErrorKind::NotFound => "Tor findet die Empfangsadresse noch nicht. Prüfe den aktuellen Kontaktcode und ob am Zielrechner „Empfang bereit“ steht.",

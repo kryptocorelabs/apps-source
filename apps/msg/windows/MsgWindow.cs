@@ -30,7 +30,7 @@ internal sealed class MsgWindow : Shell
     private bool requireTwoCodes;
     private byte[]? incomingTicket;
     private bool direct;
-    private readonly TorRuntime managedTor = new();
+    private readonly IOnionTransport onionTransport;
     private SecureString? identitySecret;
     private CancellationTokenSource? chatSession;
     private CancellationTokenSource? contactRequestSession;
@@ -84,9 +84,12 @@ internal sealed class MsgWindow : Shell
         [property: JsonPropertyName("verified")] bool Verified = false);
     private sealed record OutgoingInvitation(string Label, string Code, byte[] Ticket);
 
-    internal MsgWindow() : base("MSG", "Deine Kontakte. Eure Gespräche.",
+    internal MsgWindow() : this(new TorRuntime()) { }
+
+    internal MsgWindow(IOnionTransport onionTransport) : base("MSG", "Deine Kontakte. Eure Gespräche.",
         PrepareAppearance(), "KryptoCore-MSG;component/Assets/messenger.ico")
     {
+        this.onionTransport = onionTransport;
         MinWidth = 880;
         MinHeight = 600;
         Width = Math.Max(MinWidth, Math.Min(1180, SystemParameters.WorkArea.Width - 32));
@@ -102,7 +105,7 @@ internal sealed class MsgWindow : Shell
             chatSession?.Cancel();
             contactRequestSession?.Cancel();
             identitySecret?.Dispose();
-            managedTor.Dispose();
+            onionTransport.Stop();
             ClearSessionConversations();
         };
         refresh();
@@ -1103,7 +1106,7 @@ internal sealed class MsgWindow : Shell
             contactRequestSession?.Cancel();
             identitySecret?.Dispose();
             identitySecret = null;
-            managedTor.Dispose();
+            onionTransport.Stop();
             identityPath = publicKey = peerKey = peerAddress = null;
             contactOpened = false;
             requireTwoCodes = false;
@@ -1501,7 +1504,7 @@ internal sealed class MsgWindow : Shell
             if (identityPath is not { } path || direct || requireTwoCodes) return;
             long currentSession = identitySession;
             string address = input.Trim().ToLowerInvariant();
-            if (address.EndsWith(".onion", StringComparison.Ordinal)) address += $":{TorRuntime.OnionPort}";
+            if (address.EndsWith(".onion", StringComparison.Ordinal)) address += $":{OnionEndpoint.ChatPort}";
             Reply? acceptedReply = null;
             await Run("Verbindung wird angefragt …", async token =>
             {
@@ -1608,7 +1611,7 @@ internal sealed class MsgWindow : Shell
             {
                 chatSession?.Cancel();
                 contactRequestSession?.Cancel();
-                var endpoint = await managedTor.RotateAsync(token);
+                var endpoint = await onionTransport.RotateAsync(token);
                 onionAddress.Text = endpoint.OnionAddress;
                 ResetLink();
                 return new Reply(true, "Neue Tor-Adresse aktiv. Erstelle unter „Mein Profil“ einen neuen Kontaktcode.", null, null, null);
@@ -1652,7 +1655,7 @@ internal sealed class MsgWindow : Shell
             contactRequestSession?.Cancel();
             direct = enabled;
             clearInvitation();
-            if (direct) managedTor.Dispose();
+            if (direct) onionTransport.Stop();
             ResetLink();
             inputs.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
             verified.IsChecked = false;
@@ -1702,9 +1705,9 @@ internal sealed class MsgWindow : Shell
         return row;
     }
 
-    private async Task<TorRuntime.Endpoint> EnsureTorAsync(CancellationToken token, bool showLink = false)
+    private async Task<OnionEndpoint> EnsureTorAsync(CancellationToken token, bool showLink = false)
     {
-        var endpoint = await managedTor.StartAsync(percent =>
+        var endpoint = await onionTransport.StartAsync(percent =>
         {
             string status = $"Tor verbindet sich … {percent} %";
             SetStatus(status);

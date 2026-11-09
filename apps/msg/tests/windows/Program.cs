@@ -217,12 +217,10 @@ internal static class Program
 
         Window NewWindow(string name)
         {
-            var w = (Window)Activator.CreateInstance(type, true)!;
-            ((IDisposable)Field(w, "managedTor")!).Dispose();
-            type.GetField("managedTor", Fields)!.SetValue(w, Activator.CreateInstance(runtime, Fields, null, [Path.Combine(fixtures.FullName, name)], null));
+            var tor = Activator.CreateInstance(runtime, Fields, null, [Path.Combine(fixtures.FullName, name)], null)!;
+            var w = (Window)Activator.CreateInstance(type, Fields, null, [tor], null)!;
             if (proxy is not null)
             {
-                var tor = Field(w, "managedTor")!;
                 var startup = (Task)runtime.GetMethod("StartAsync", Fields)!.Invoke(tor, [null, CancellationToken.None, false])!;
                 Wait(() => startup.IsCompleted, "offline Tor address", 30);
                 startup.GetAwaiter().GetResult();

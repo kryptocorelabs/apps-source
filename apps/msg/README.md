@@ -209,6 +209,22 @@ after confirmation and after local cancellation/locking.
 Protocol references are the [Noise specification](https://noiseprotocol.org/noise.html)
 and the [Tor onion-service overview](https://community.torproject.org/onion-services/overview/).
 
+### External dependencies
+
+| Dependency | Why MSG uses it | Possible alternative or trade-off |
+| --- | --- | --- |
+| Bundled Tor Expert Bundle and the Tor network | Tor publishes the onion service and routes connections without resolving onion addresses through local DNS. Relay availability and traffic correlation remain external risks. | [Arti](https://tpo.pages.torproject.net/onion-services/ecosystem/dev/implementations/) could provide the Tor implementation after testing service-key persistence, local proxy behavior and feature parity. Explicit direct IP mode avoids Tor and exposes network addresses to peers. |
+| Snow and its RustCrypto primitives | Snow implements the Noise handshakes that establish the encrypted MSG sessions and bind them to the expected keys. | Another maintained Noise implementation would need to pass interoperability and negative tests for the exact protocol contexts, framing and key handling. |
+| KryptoCore and OS randomness | KryptoCore protects local identity data and invitation codes. Key and invitation generation need the OS random source. | An independent implementation could reproduce the existing Argon2id and XChaCha20-Poly1305 profiles after compatibility testing. It would still need trustworthy randomness. |
+
+The desktop window uses `IOnionTransport` for startup, address rotation and
+shutdown. `TorRuntime` owns the bundled process, authenticated control channel
+and service profile. The Rust worker receives a loopback SOCKS endpoint and
+dials validated onion addresses through `OnionTransport`; peer authentication
+stays in the MSG protocols. A replacement must preserve the local-only handoff,
+support the onion service ports and fail closed if the onion route is unavailable.
+Direct IP remains an explicit mode.
+
 ## Build
 
 From the workspace root, run `./apps/msg/build-windows.ps1`. The

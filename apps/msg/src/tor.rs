@@ -1,68 +1,33 @@
-use crate::Error;
+pub use crate::transport::OnionTarget;
+use crate::transport::OnionTransport;
 use std::{
-    fmt,
     io::{self, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpStream},
-    str::FromStr,
     time::Duration,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OnionTarget {
-    host: String,
+/// Tor adapter for the local SOCKS endpoint opened by the runtime.
+pub struct SocksOnionTransport {
     port: u16,
 }
 
-impl FromStr for OnionTarget {
-    type Err = Error;
-
-    fn from_str(value: &str) -> Result<Self, Error> {
-        let (host, port) = value.rsplit_once(':').ok_or(Error::Identity)?;
-        let name = host.strip_suffix(".onion").ok_or(Error::Identity)?;
-        let port = port.parse::<u16>().map_err(|_| Error::Identity)?;
-        if name.len() != 56
-            || !name
-                .bytes()
-                .all(|byte| matches!(byte, b'a'..=b'z' | b'2'..=b'7'))
-            || port == 0
-        {
-            return Err(Error::Identity);
-        }
-        Ok(Self {
-            host: host.into(),
-            port,
-        })
+impl SocksOnionTransport {
+    pub fn new(port: u16) -> Self {
+        Self { port }
     }
 }
 
-impl fmt::Display for OnionTarget {
-    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(out, "{}:{}", self.host, self.port)
-    }
-}
-
-impl OnionTarget {
-    pub fn with_port(&self, port: u16) -> Self {
-        Self {
-            host: self.host.clone(),
-            port,
-        }
-    }
-
-    pub fn connect_presence(&self, socks_port: u16) -> io::Result<TcpStream> {
-        let mut stream = proxy_stream(socks_port, Duration::from_secs(15))?;
-        let target = Self {
-            host: self.host.clone(),
-            port: crate::presence::PORT,
-        };
+impl OnionTransport for SocksOnionTransport {
+    fn connect_presence(&self, target: &OnionTarget) -> io::Result<TcpStream> {
+        let mut stream = proxy_stream(self.port, Duration::from_secs(15))?;
         target.socks_connect(&mut stream)?;
         Ok(stream)
     }
 
-    pub fn connect(&self, socks_port: u16, mut retrying: impl FnMut()) -> io::Result<TcpStream> {
+    fn connect(&self, target: &OnionTarget, retrying: &mut dyn FnMut()) -> io::Result<TcpStream> {
         for attempt in 1..=3 {
-            let mut stream = proxy_stream(socks_port, Duration::from_secs(25))?;
-            match self.socks_connect(&mut stream) {
+            let mut stream = proxy_stream(self.port, Duration::from_secs(25))?;
+            match target.socks_connect(&mut stream) {
                 Ok(()) => return Ok(stream),
                 Err(error)
                     if attempt < 3
@@ -82,6 +47,19 @@ impl OnionTarget {
             }
         }
         unreachable!("the final connection attempt always returns")
+    }
+}
+
+impl OnionTarget {
+    /// Compatibility entry point. Use [`OnionTransport`] for transport-independent callers.
+    pub fn connect(&self, socks_port: u16, mut retrying: impl FnMut()) -> io::Result<TcpStream> {
+        SocksOnionTransport::new(socks_port).connect(self, &mut retrying)
+    }
+
+    /// Check the target's MSG presence port through a local SOCKS endpoint.
+    pub fn connect_presence(&self, socks_port: u16) -> io::Result<TcpStream> {
+        SocksOnionTransport::new(socks_port)
+            .connect_presence(&self.with_port(crate::presence::PORT))
     }
 
     fn socks_connect(&self, stream: &mut (impl Read + Write)) -> io::Result<()> {
@@ -160,6 +138,7 @@ pub fn probe_proxy(port: u16) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::net::TcpListener;
 
     #[test]
     fn sends_onion_name_to_proxy_and_rejects_proxy_failure() {
@@ -202,5 +181,35 @@ mod tests {
             target.socks_connect(&mut invalid).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn transport_propagates_onion_proxy_denial() {
+        let proxy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let adapter = SocksOnionTransport::new(proxy.local_addr().unwrap().port());
+        let transport: &dyn OnionTransport = &adapter;
+        let host = format!("{}.onion", "a".repeat(56));
+        let target = format!("{host}:49424").parse().unwrap();
+        let endpoint = std::thread::spawn(move || {
+            let (mut stream, _) = proxy.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut greeting = [0; 3];
+            stream.read_exact(&mut greeting).unwrap();
+            assert_eq!(greeting, [5, 1, 0]);
+            stream.write_all(&[5, 0]).unwrap();
+            let mut request = [0; 69];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request[..5], &[5, 1, 0, 3, 62]);
+            assert_eq!(&request[5..67], host.as_bytes());
+            assert_eq!(&request[67..], &49424u16.to_be_bytes());
+            stream.write_all(&[5, 0xf4, 0, 1]).unwrap();
+        });
+        let error = transport
+            .connect(&target, &mut || panic!("a denial must not retry"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        endpoint.join().unwrap();
     }
 }

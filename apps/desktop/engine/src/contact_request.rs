@@ -1,7 +1,11 @@
 use super::{
     contact_outcome, emit_progress, format_key, msg, parse_key, read_frame, Outcome, Target,
 };
-use msg::{contact::Contact, contact_request as request, tor::OnionTarget};
+use msg::{
+    contact::Contact,
+    contact_request as request,
+    transport::{OnionTarget, OnionTransport},
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -177,7 +181,7 @@ pub(super) fn send(
     identity: &msg::Identity,
     address: &str,
     own_address: &str,
-    socks_port: u16,
+    onion: Option<&dyn OnionTransport>,
 ) -> Result<Outcome, String> {
     let target: OnionTarget = address
         .parse()
@@ -186,11 +190,12 @@ pub(super) fn send(
         .parse()
         .map_err(|_| "Deine Tor-Adresse ist noch nicht verfügbar.")?;
     let target = target.with_port(request::CHAT_PORT);
-    if target == own.with_port(request::CHAT_PORT) || socks_port == 0 {
+    if target == own.with_port(request::CHAT_PORT) {
         return Err("Gib die Tor-Adresse der anderen Person ein.".into());
     }
+    let onion = onion.ok_or("Gib die Tor-Adresse der anderen Person ein.")?;
     emit_progress(true, "request_connecting");
-    let mut stream = target.with_port(request::PORT).connect(socks_port, || {})
+    let mut stream = onion.connect(&target.with_port(request::PORT), &mut || {})
         .map_err(|_| "Die Adresse ist nicht erreichbar oder die andere Person hat Kontaktanfragen ausgeschaltet.")?;
     emit_progress(true, "request_waiting");
     let key = request::send(&mut stream, identity, &own)

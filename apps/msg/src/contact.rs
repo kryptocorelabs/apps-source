@@ -17,7 +17,7 @@ const MAX_CODE: usize = 160;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Target {
     Direct(SocketAddr),
-    Onion(crate::tor::OnionTarget),
+    Onion(crate::transport::OnionTarget),
 }
 
 impl FromStr for Target {

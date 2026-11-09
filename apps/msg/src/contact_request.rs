@@ -2,7 +2,7 @@
 use super::{
     contact::{Contact, Target},
     dh::Resolver,
-    tor::OnionTarget,
+    transport::OnionTarget,
     Connection, Error, Identity, PublicKey, Result,
 };
 use std::{

@@ -1,6 +1,6 @@
 use super::{
     contact::{Contact, Target},
-    tor::OnionTarget,
+    transport::OnionTarget,
     Connection, Error, Identity, PublicKey, Result, RECEIPT,
 };
 use std::{
