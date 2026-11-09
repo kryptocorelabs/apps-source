@@ -54,12 +54,12 @@ try {
 
     $rust = rustc -vV
     if ($LASTEXITCODE -ne 0) { throw "Install the Rust $toolchain toolchain." }
-    $linker = Get-Command link.exe -CommandType Application
-    $linkerVersion = $linker.FileVersionInfo.FileVersion
-    $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker.Source
-    if (-not $env:WindowsSDKVersion) {
+    if (-not $env:VCToolsInstallDir -or -not $env:WindowsSDKVersion) {
         throw 'Start PowerShell in an x64 Visual Studio developer environment.'
     }
+    $linker = Get-Item -LiteralPath (Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe')
+    $linkerVersion = $linker.VersionInfo.FileVersion
+    $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker.FullName
 
     $paths = @{
         'KryptoCore-Container.exe' = 'container'
