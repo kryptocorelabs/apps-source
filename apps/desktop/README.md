@@ -29,6 +29,28 @@ into a new temporary directory for each operation and removes it afterwards.
 Run either executable with `--verify-package` to check that the window
 loads and the bundled engine answers a test request.
 
+## Verify a Windows build
+
+The [Windows build workflow](../../.github/workflows/windows-provenance.yml)
+builds Messenger, Container and Rescue in two Windows jobs from the same
+Git commit. Each job records its toolchain, inputs and executable hashes in
+`BUILD.json`. The comparison job checks those records and compares the
+executables byte for byte. On a match it attests the three executables and
+uploads them with both build records and `SHA256SUMS.txt`.
+
+To repeat a build, use a clean checkout at the recorded commit, select the
+recorded MSVC and Windows SDK in an x64 Visual Studio developer PowerShell,
+install the recorded Rust and .NET SDK, and run
+`./apps/desktop/build-release-windows.ps1 -OutputDirectory C:/build/kryptocore`.
+The output directory must be new. The script checks the Tor archive against
+its pinned SHA-256 before extracting it.
+
+Verify an executable from a successful run with
+`gh attestation verify KryptoCore-Rescue.exe -R kryptocorelabs/apps-source`,
+then compare its SHA-256 with both build records. This evidence applies to the
+exact executable bytes. Earlier preview ZIPs retain their original build and
+publisher-signature records.
+
 Container starts with two tiles. Use **Dateien verschlüsseln** to add files or
 folders, then enter or generate a passphrase. The app suggests a new file next
 to your selection. Use **Container öffnen** to select an archive, enter the

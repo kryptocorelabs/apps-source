@@ -1,0 +1,96 @@
+name: Windows release build provenance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.*'
+      - 'apps/**'
+      - 'modules/**'
+      - '.github/workflows/windows-provenance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [first, second]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          path: source-${{ matrix.copy }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.403'
+      - run: rustup toolchain install 1.99.1-x86_64-pc-windows-msvc --profile minimal
+      - name: Build the three standalone executables
+        shell: pwsh
+        working-directory: source-${{ matrix.copy }}
+        env:
+          BUILD_COPY: ${{ matrix.copy }}
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'An x64 Visual Studio toolchain is required.' }
+          $developerShell = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
+          $variables = cmd.exe /d /c ('call "' + $developerShell + '" -arch=x64 -host_arch=x64 -no_logo && set')
+          if ($LASTEXITCODE -ne 0) { throw 'Visual Studio environment initialization failed.' }
+          foreach ($line in $variables) {
+            $name, $value = $line -split '=', 2
+            if ($name -and $null -ne $value) { [Environment]::SetEnvironmentVariable($name, $value, 'Process') }
+          }
+          & ./apps/desktop/build-release-windows.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY")
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-build-${{ matrix.copy }}
+          path: ${{ runner.temp }}/windows-${{ matrix.copy }}/artifacts/
+          if-no-files-found: error
+
+  compare-and-attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: windows-build-*
+          path: builds
+      - name: Validate the build records and compare exact executable bytes
+        shell: bash
+        run: |
+          for copy in first second; do
+            dir="builds/windows-build-$copy"
+            jq -e --arg commit "$GITHUB_SHA" '.source_commit == $commit and (.files | length == 3)' "$dir/BUILD.json"
+            for file in KryptoCore-{Container,MSG,Rescue}.exe; do
+              digest=$(sha256sum "$dir/$file" | cut -d ' ' -f 1)
+              size=$(stat -c '%s' "$dir/$file")
+              jq -e --arg file "$file" --arg sha "$digest" --argjson size "$size" \
+                'any(.files[]; .name == $file and .sha256 == $sha and .size == $size)' "$dir/BUILD.json"
+            done
+          done
+          mkdir verified
+          for file in KryptoCore-{Container,MSG,Rescue}.exe; do
+            cmp "builds/windows-build-first/$file" "builds/windows-build-second/$file"
+            cp "builds/windows-build-first/$file" verified/
+          done
+          cp builds/windows-build-first/BUILD.json verified/BUILD-FIRST.json
+          cp builds/windows-build-second/BUILD.json verified/BUILD-SECOND.json
+          (cd verified && sha256sum KryptoCore-*.exe > SHA256SUMS.txt)
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: verified/*.exe
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-verified-${{ github.sha }}
+          path: verified/
+          if-no-files-found: error
