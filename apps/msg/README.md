@@ -154,11 +154,12 @@ or **Ablehnen**. Choosing a folder also sets it for subsequent files in the
 current chat; these use an `MSG-` filename prefix. Save-as uses the selected
 name. Existing files are never replaced.
 
-Messenger asks before saving potentially executable attachments, including
-programs, scripts and shortcuts. The prompt offers the selected receive folder
-when available. Each such attachment requires its own decision. Messenger checks
-common filename extensions and file signatures. Use your usual malware scanner
-before opening an unexpected attachment.
+Messenger asks before saving programs, scripts, shortcuts, Office formats that
+can contain macros (such as `.docm` and `.xlsm`), and mountable disk images
+(`.iso`, `.vhd`, `.vhdx`). Each such attachment requires its own decision
+even when a receive folder is set. Messenger checks common filename extensions
+and executable file signatures. Use your usual malware scanner before opening
+an unexpected attachment.
 
 While waiting for a decision, one incoming attachment remains in bounded
 memory and the chat can receive and answer messages. Closing the popup or

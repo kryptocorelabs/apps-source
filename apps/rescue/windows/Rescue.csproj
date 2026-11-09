@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>KryptoCore-Rescue</AssemblyName>
-    <Version>0.1.0-preview.3</Version>
+    <Version>0.1.0-preview.4</Version>
     <DefineConstants>$(DefineConstants);RESCUE_APP</DefineConstants>
   </PropertyGroup>
   <ItemGroup>

@@ -73,6 +73,9 @@ pub(super) fn requires_attachment_confirmation(name: &str, bytes: &[u8]) -> bool
             // Launchers, shortcuts, and files that can change the system.
             | "lnk" | "url" | "pif" | "scf" | "application" | "appref-ms" | "chm"
             | "jnlp" | "msc" | "reg" | "inf" | "settingcontent-ms" | "search-ms" | "library-ms"
+            // Office files that can carry macros and Windows mountable disk images.
+            | "docm" | "dotm" | "xlsm" | "xltm" | "xlam" | "xlsb" | "pptm" | "potm"
+            | "ppsm" | "ppam" | "iso" | "vhd" | "vhdx"
     )
 }
 

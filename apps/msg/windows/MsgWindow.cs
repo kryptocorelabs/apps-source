@@ -466,7 +466,7 @@ internal sealed class MsgWindow : Shell
         var downloadPanel = Section("Datei erhalten", "");
         var downloadInfo = (TextBlock)downloadPanel.Children[1];
         const string saveInFolderLabel = "Im Empfangsordner speichern";
-        const string attachmentWarning = "Diese Datei kann beim Öffnen Programme oder Skripte starten oder Einstellungen ändern. Speichere sie nur, wenn du sie erwartet hast.";
+        const string attachmentWarning = "Diese Datei kann Programme, Skripte oder Makros enthalten. Sie kann auch ein einbindbares Laufwerksabbild sein. Speichere sie nur, wenn du sie erwartet hast.";
         var saveInFolder = Button(saveInFolderLabel, async () => await SaveInFolder());
         downloadPanel.Children.Add(Row(
             saveInFolder,
@@ -514,7 +514,7 @@ internal sealed class MsgWindow : Shell
                 return;
             bool useReceiveFolder = downloadNeedsConfirmation && downloadHasFolder;
             string question = downloadNeedsConfirmation ? attachmentWarning : "Wo möchtest du die Datei speichern?";
-            var shown = new MsgPrompt(this, downloadNeedsConfirmation ? "Potenziell ausführbare Datei" : "Datei erhalten",
+            var shown = new MsgPrompt(this, downloadNeedsConfirmation ? "Datei mit Sicherheitsrisiko" : "Datei erhalten",
                 $"{downloadName} · {downloadSize / 1024.0:N1} KiB\n\n{question}",
                 useReceiveFolder ? saveInFolderLabel : "Speichern unter …",
                 useReceiveFolder ? "Speichern unter …" : "Ordner wählen …", "Ablehnen");
@@ -915,7 +915,7 @@ internal sealed class MsgWindow : Shell
                 : localStatus ? "Deine Zustimmung ist da. Die Anzeige wartet auf die andere Person."
                 : "Wollt ihr den Online-Status teilen? Die Anzeige erscheint erst, wenn ihr beide zustimmt.";
             availability.Foreground = Brush(localStatus && peerStatus ? "Mint" : "Muted");
-            folderState.Text = folderReady ? "Empfangsordner bereit · Ausführbare Dateien brauchen eine Bestätigung."
+            folderState.Text = folderReady ? "Empfangsordner bereit · Riskante Dateitypen brauchen eine Bestätigung."
                 : "Eingehende Dateien fragen nach einem Speicherort · bis 16 MiB.";
             receiveFolder.IsEnabled = ready && !writing;
             downloadCard.Visibility = ready && downloadId is not null ? Visibility.Visible : Visibility.Collapsed;

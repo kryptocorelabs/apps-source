@@ -26,7 +26,7 @@ archive are outside this preview scope.
 | Threat | Protection and boundary |
 | --- | --- |
 | Network interception, replay or reordering | The channel authenticates ordered Noise records. Known peer keys are pinned. A first contact still requires a separate key comparison to establish a person's identity. Direct IP exposes network addresses to peers. Tor traffic correlation and denial of service remain outside scope. |
-| Unwanted requests or attachments | Address-only requests are opt-in for the unlocked session. Blocking binds to a public key. A sender can create a new identity. Attachment names and sizes are bounded, writes do not replace files, and potentially executable attachments require confirmation. Authenticating a peer does not establish file safety. |
+| Unwanted requests or attachments | Address-only requests are opt-in for the unlocked session. Blocking binds to a public key. A sender can create a new identity. Attachment names and sizes are bounded, and writes do not replace files. Programs, scripts, shortcuts, macro-capable Office files and mountable disk images require confirmation before saving. Authenticating a peer does not establish file safety. |
 | Copied local stores | Password strength determines resistance to offline guesses against a copied identity. Keep the identity, sidecars and Tor profile in a trusted user directory. The block and contact stores have no freshness guarantee against replacement with earlier authentic copies. |
 | Local process, memory or compromised peer | The app assumes the user controls the OS, local account and process environment. Plaintext appears on both endpoints. A process able to inspect either endpoint can read the active conversation and credentials. |
 

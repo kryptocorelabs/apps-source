@@ -153,14 +153,14 @@ internal static class Program
             string executableDestination = Path.Combine(fixtures.FullName, "MSG-Beispiel.txt.EXE");
             File.WriteAllText(executable, "Synthetic executable name only.");
             sendFile = SendAttachment(alice, executable);
-            download = Prompt(bob, "Potenziell ausführbare Datei");
+            download = Prompt(bob, "Datei mit Sicherheitsrisiko");
             if (File.Exists(executableDestination)) throw new Exception("Executable was saved before confirmation");
             Click(download, "Ablehnen");
             Wait(() => sendFile.IsCompleted && Local(bob, "downloadId") is null, "decline executable");
             sendFile.GetAwaiter().GetResult();
             if (File.Exists(executableDestination)) throw new Exception("Declined executable was saved");
             sendFile = SendAttachment(alice, executable);
-            download = Prompt(bob, "Potenziell ausführbare Datei");
+            download = Prompt(bob, "Datei mit Sicherheitsrisiko");
             Click(download, "Im Empfangsordner speichern");
             Wait(() => sendFile.IsCompleted && Local(bob, "downloadId") is null, "confirm executable");
             sendFile.GetAwaiter().GetResult();

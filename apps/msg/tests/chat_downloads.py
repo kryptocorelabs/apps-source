@@ -107,24 +107,32 @@ with tempfile.TemporaryDirectory() as scratch, ExitStack() as stack:
     right.event("chat_file")
     left.event("chat_receipt", ok=True)
     assert (root/"MSG-attachment.dat").read_bytes() == payload
-    for name, contents in [("release.txt.EXE", b"test fixture"), (".ps1", b"test fixture"),
-                           ("renamed.txt", b"MZ fixture")]:
-        executable = root / name
-        executable.write_bytes(contents)
+    risky_names = [
+        "release.txt.EXE", ".ps1", "report.docm", "letter.dotm", "records.XLSM",
+        "model.xltm", "formula.xlam", "book.xlsb", "slides.pptm", "style.potm",
+        "show.ppsm", "extension.ppam", "image.ISO", "machine.vhd", "machine.vhdx",
+    ]
+    fixtures = [(name, b"test fixture") for name in risky_names]
+    fixtures.append(("renamed.txt", b"MZ fixture"))
+    for name, contents in fixtures:
+        attachment = root / name
+        attachment.write_bytes(contents)
         destination = root / f"MSG-{name}"
-        left.send("file", path=str(executable))
+        left.send("file", path=str(attachment))
         offer = right.event("chat_download", name=name, confirm=True, has_folder=True)
         assert not destination.exists()
         right.send("reject_download", id=offer["id"])
         right.event("chat_download_closed", id=offer["id"])
         left.event("chat_receipt", ok=False)
         assert not destination.exists()
-    left.send("file", path=str(executable))
-    offer = right.event("chat_download", name=executable.name, confirm=True, has_folder=True)
+    attachment = root / "records.XLSM"
+    destination = root / f"MSG-{attachment.name}"
+    left.send("file", path=str(attachment))
+    offer = right.event("chat_download", name=attachment.name, confirm=True, has_folder=True)
     right.send("save_in_folder", id=offer["id"])
     right.event("chat_file", id=offer["id"])
     left.event("chat_receipt", ok=True)
-    assert destination.read_bytes() == executable.read_bytes()
+    assert destination.read_bytes() == attachment.read_bytes()
     empty = root / "empty.bin"
     empty.write_bytes(b"")
     left.send("file", path=str(empty))
@@ -134,5 +142,5 @@ with tempfile.TemporaryDirectory() as scratch, ExitStack() as stack:
     left.worker.stdin.close()
     assert left.worker.wait(5) == 0
     assert right.worker.wait(5) == 0
-    print("Preview worker passed: download offers, replies, stale decisions, collision protection, executable confirmation, remembered folder, empty file and shutdown.")
+    print("Preview worker passed: download offers, replies, stale decisions, collision protection, risky attachment confirmation, remembered folder, empty file and shutdown.")
 

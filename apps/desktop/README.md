@@ -35,8 +35,10 @@ The [Windows build workflow](../../.github/workflows/windows-provenance.yml)
 builds Messenger, Container and Rescue in two Windows jobs from the same
 Git commit. Each job records its toolchain, inputs and executable hashes in
 `BUILD.json`. The comparison job checks those records and compares the
-executables byte for byte. On a match it attests the three executables and
-uploads them with both build records and `SHA256SUMS.txt`.
+executables and the Rescue release ZIP byte for byte. It also checks the
+Rescue executable inside the ZIP against the standalone executable. On a
+match it attests those artifacts and uploads them with both build records
+and `SHA256SUMS.txt`.
 
 To repeat a build, use a clean checkout at the recorded commit, select the
 recorded MSVC and Windows SDK in an x64 Visual Studio developer PowerShell,
@@ -48,8 +50,15 @@ its pinned SHA-256 before extracting it.
 Verify an executable from a successful run with
 `gh attestation verify KryptoCore-Rescue.exe -R kryptocorelabs/apps-source`,
 then compare its SHA-256 with both build records. This evidence applies to the
-exact executable bytes. Earlier preview ZIPs retain their original build and
-publisher-signature records.
+exact executable bytes. Use the same command with the Rescue ZIP path to
+verify the archive and its notices.
+
+Windows Authenticode requires a publicly trusted publisher certificate and
+signing access. SignTool with SHA-256 and an RFC 3161 timestamp can sign the
+matched executable once that access exists. Signing changes the executable
+bytes. Record the unsigned build digest and the signed digest, verify the
+signed file with SignTool using the Authenticode policy, and attest the
+signed file separately before packaging. [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 
 Container starts with two tiles. Use **Dateien verschlüsseln** to add files or
 folders, then enter or generate a passphrase. The app suggests a new file next

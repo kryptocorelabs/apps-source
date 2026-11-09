@@ -29,6 +29,10 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.403'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.17'
+          architecture: x64
       - run: rustup toolchain install 1.99.1-x86_64-pc-windows-msvc --profile minimal
       - name: Build the three standalone executables
         shell: pwsh
@@ -47,6 +51,9 @@ jobs:
             if ($name -and $null -ne $value) { [Environment]::SetEnvironmentVariable($name, $value, 'Process') }
           }
           & ./apps/desktop/build-release-windows.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY")
+          $artifacts = Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY/artifacts"
+          python apps/rescue/package-windows-preview.py --executable (Join-Path $artifacts 'KryptoCore-Rescue.exe') --output-dir $artifacts --dotnet-runtime '10.0.14'
+          if ($LASTEXITCODE -ne 0) { throw 'Rescue release packaging failed.' }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-build-${{ matrix.copy }}
@@ -65,7 +72,7 @@ jobs:
         with:
           pattern: windows-build-*
           path: builds
-      - name: Validate the build records and compare exact executable bytes
+      - name: Compare executable and Rescue release ZIP bytes
         shell: bash
         run: |
           for copy in first second; do
@@ -83,12 +90,43 @@ jobs:
             cmp "builds/windows-build-first/$file" "builds/windows-build-second/$file"
             cp "builds/windows-build-first/$file" verified/
           done
+          shopt -s nullglob
+          archives=(builds/windows-build-first/KryptoCore-Rescue-*-windows-x64.zip)
+          second_archives=(builds/windows-build-second/KryptoCore-Rescue-*-windows-x64.zip)
+          [[ ${#archives[@]} -eq 1 && ${#second_archives[@]} -eq 1 ]]
+          archive="${archives[0]##*/}"
+          cmp "${archives[0]}" "builds/windows-build-second/$archive"
+          cp "${archives[0]}" verified/
+          python3 - "verified/$archive" verified/KryptoCore-Rescue.exe <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+          import zipfile
+
+          archive, executable = map(Path, sys.argv[1:])
+          member = f"{archive.stem}/{executable.name}"
+          with zipfile.ZipFile(archive) as package, executable.open("rb") as expected:
+              assert package.namelist().count(member) == 1
+              with package.open(member) as packaged:
+                  assert hashlib.file_digest(packaged, "sha256").digest() == hashlib.file_digest(expected, "sha256").digest()
+          PY
           cp builds/windows-build-first/BUILD.json verified/BUILD-FIRST.json
           cp builds/windows-build-second/BUILD.json verified/BUILD-SECOND.json
-          (cd verified && sha256sum KryptoCore-*.exe > SHA256SUMS.txt)
+          (cd verified && sha256sum KryptoCore-*.exe "$archive" > SHA256SUMS.txt)
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: verified/*.exe
+          subject-path: |
+            verified/*.exe
+            verified/KryptoCore-Rescue-*-windows-x64.zip
+      - name: Verify the Rescue attestations against the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in verified/KryptoCore-Rescue.exe verified/KryptoCore-Rescue-*-windows-x64.zip; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$GITHUB_SHA" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/windows-provenance.yml"
+          done
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-verified-${{ github.sha }}
