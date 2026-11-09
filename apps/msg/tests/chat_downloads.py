@@ -41,15 +41,15 @@ class Peer:
     def send(self, kind, **fields):
         self.worker.stdin.write(frame(dict(kind=kind, **fields)))
         self.worker.stdin.flush()
-    def event(self, name, **expected):
+    def event(self, event_name, **expected):
         for index, event in enumerate(self.saved):
-            if event.get("event") == name:
+            if event.get("event") == event_name:
                 del self.saved[index]
                 assert all(event[k] == v for k,v in expected.items()), event
                 return event
         while True:
             event = self.events.get(timeout=15)
-            if event.get("event") == name:
+            if event.get("event") == event_name:
                 assert all(event[k] == v for k,v in expected.items()), event
                 return event
             if "event" not in event:
@@ -77,6 +77,7 @@ with tempfile.TemporaryDirectory() as scratch, ExitStack() as stack:
     offer = right.event("chat_download")
     ident = offer["id"]
     assert offer["name"] == source.name and offer["size"] == len(payload)
+    assert not offer["confirm"] and not offer["has_folder"]
     assert not (root / "MSG-attachment.dat").exists()
     right.send("text", text="Can still reply during the save prompt")
     left.event("chat_text", text="Can still reply during the save prompt")
@@ -106,6 +107,24 @@ with tempfile.TemporaryDirectory() as scratch, ExitStack() as stack:
     right.event("chat_file")
     left.event("chat_receipt", ok=True)
     assert (root/"MSG-attachment.dat").read_bytes() == payload
+    for name, contents in [("release.txt.EXE", b"test fixture"), (".ps1", b"test fixture"),
+                           ("renamed.txt", b"MZ fixture")]:
+        executable = root / name
+        executable.write_bytes(contents)
+        destination = root / f"MSG-{name}"
+        left.send("file", path=str(executable))
+        offer = right.event("chat_download", name=name, confirm=True, has_folder=True)
+        assert not destination.exists()
+        right.send("reject_download", id=offer["id"])
+        right.event("chat_download_closed", id=offer["id"])
+        left.event("chat_receipt", ok=False)
+        assert not destination.exists()
+    left.send("file", path=str(executable))
+    offer = right.event("chat_download", name=executable.name, confirm=True, has_folder=True)
+    right.send("save_in_folder", id=offer["id"])
+    right.event("chat_file", id=offer["id"])
+    left.event("chat_receipt", ok=True)
+    assert destination.read_bytes() == executable.read_bytes()
     empty = root / "empty.bin"
     empty.write_bytes(b"")
     left.send("file", path=str(empty))
@@ -115,5 +134,5 @@ with tempfile.TemporaryDirectory() as scratch, ExitStack() as stack:
     left.worker.stdin.close()
     assert left.worker.wait(5) == 0
     assert right.worker.wait(5) == 0
-    print("Preview worker passed: file offer without a folder, continued replies, stale decision rejection, save-as, collision protection, decline, folder selection, empty file and shutdown.")
+    print("Preview worker passed: download offers, replies, stale decisions, collision protection, executable confirmation, remembered folder, empty file and shutdown.")
 

@@ -16,7 +16,8 @@ fn contact_trust_and_blocks_are_separate_identity_bound_stores() {
     assert_eq!(blocks.read().unwrap().as_slice(), b"blocked identity");
     assert_eq!(trust.read().unwrap().as_slice(), b"unverified identity");
     drop(blocks);
-    let other = ContactBook::blocked(&path, &Identity::generate().unwrap()).unwrap();
+    let stranger = Identity::generate().unwrap();
+    let other = ContactBook::blocked(&path, &stranger).unwrap();
     assert!(other.read().is_err());
     drop(other);
     fs::copy(
@@ -317,14 +318,50 @@ fn contact_book_is_bound_to_the_identity_and_rejects_tampering() {
     assert_eq!(book.read().unwrap().as_slice(), data);
     let sidecar = temp.path().join("alice.kcmi.contacts");
     let mut ciphertext = fs::read(&sidecar).unwrap();
+    assert!(ciphertext.starts_with(b"KCMB\0\0\0\x02"));
     assert!(!ciphertext.windows(data.len()).any(|bytes| bytes == data));
     drop(book);
-    let other = ContactBook::open(&path, &Identity::generate().unwrap()).unwrap();
+    let bob = Identity::generate().unwrap();
+    let other = ContactBook::open(&path, &bob).unwrap();
     assert!(other.read().is_err());
     drop(other);
+    fs::write(temp.path().join("alice.kcmi.blocked"), &ciphertext).unwrap();
+    assert!(ContactBook::blocked(&path, &alice).unwrap().read().is_err());
     *ciphertext.last_mut().unwrap() ^= 1;
     fs::write(sidecar, ciphertext).unwrap();
     assert!(ContactBook::open(&path, &alice).unwrap().read().is_err());
+}
+
+#[test]
+fn contact_book_migrates_authenticated_v1_stores_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("alice.kcmi");
+    let sidecar = temp.path().join("alice.kcmi.contacts");
+    let alice = Identity::generate().unwrap();
+    let legacy_header = b"KCMB\0\0\0\x01";
+    let legacy_key = kryptocore::derive_key(&alice.0[..], b"KCMB v1 contacts").unwrap();
+    let data = b"legacy contact data";
+    let (nonce, ciphertext) = kryptocore::encrypt(&legacy_key, data, legacy_header).unwrap();
+    let mut legacy = [legacy_header.as_slice(), nonce.as_slice(), &ciphertext].concat();
+    let last = legacy.len() - 1;
+    legacy[last] ^= 1;
+    fs::write(&sidecar, &legacy).unwrap();
+    let book = ContactBook::open(&path, &alice).unwrap();
+    assert!(book.read().is_err());
+    assert_eq!(fs::read(&sidecar).unwrap(), legacy);
+    legacy[last] ^= 1;
+    fs::write(&sidecar, legacy).unwrap();
+    assert_eq!(book.read().unwrap().as_slice(), data);
+    assert!(fs::read(&sidecar).unwrap().starts_with(b"KCMB\0\0\0\x02"));
+    drop(book);
+    assert_eq!(
+        ContactBook::open(&path, &alice)
+            .unwrap()
+            .read()
+            .unwrap()
+            .as_slice(),
+        data
+    );
 }
 
 #[test]

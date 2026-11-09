@@ -17,6 +17,7 @@ fn recognizes_current_markers_but_never_claims_authentication() {
         (b"KCC\0\0\0\0\x01".as_slice(), 136, Format::ContainerV1),
         (b"KCMI\0\0\0\x01".as_slice(), 128, Format::MsgIdentityV1),
         (b"KCMB\0\0\0\x01".as_slice(), 48, Format::MsgStoreV1),
+        (b"KCMB\0\0\0\x02".as_slice(), 48, Format::MsgStoreV2),
     ] {
         // Deliberately invalid ciphertext: a marker is not proof of authenticity.
         let bytes = sample(marker, size);
@@ -48,7 +49,7 @@ fn rejects_unknown_versions_truncation_and_invalid_sizes() {
         b"KCV9\0".as_slice(),
         b"KCC\0\0\0\0\x02",
         b"KCMI\0\0\0\x02",
-        b"KCMB\0\0\0\x02",
+        b"KCMB\0\0\0\x03",
     ] {
         assert_eq!(
             inspect_reader(&mut Cursor::new(sample(marker, 256)), 256).unwrap_err(),

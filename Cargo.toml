@@ -3,5 +3,5 @@ members = ["apps/container", "apps/desktop/engine", "apps/msg", "apps/rescue", "
 resolver = "2"
 
 [workspace.dependencies]
-kryptocore = { git = "https://github.com/kryptocorelabs/kryptocore", rev = "75a7d71821ed483f5f6dc13aa970e43efe08d834" }
-kryptocore-vault-format = { git = "https://github.com/kryptocorelabs/vault-source", rev = "2e7fbc92cb3f373f764fbe2622d4c87f14ceb32b" }
+kryptocore = { git = "https://github.com/kryptocorelabs/kryptocore", rev = "89abb9bdf8cf4751f718343920abf70c0af8d2eb" }
+kryptocore-vault-format = { git = "https://github.com/kryptocorelabs/vault-source", rev = "778b7e22c959b5e209a5b97c35f797c6c47faa9f" }

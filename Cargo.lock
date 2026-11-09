@@ -255,6 +255,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -272,11 +290,13 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "kryptocore"
 version = "0.1.0"
-source = "git+https://github.com/kryptocorelabs/kryptocore?rev=75a7d71821ed483f5f6dc13aa970e43efe08d834#75a7d71821ed483f5f6dc13aa970e43efe08d834"
+source = "git+https://github.com/kryptocorelabs/kryptocore?rev=89abb9bdf8cf4751f718343920abf70c0af8d2eb#89abb9bdf8cf4751f718343920abf70c0af8d2eb"
 dependencies = [
  "argon2",
  "chacha20poly1305",
  "getrandom 0.3.4",
+ "hkdf",
+ "sha2",
  "subtle",
  "zeroize",
 ]
@@ -347,7 +367,7 @@ dependencies = [
 [[package]]
 name = "kryptocore-vault-format"
 version = "0.1.0-rc.2"
-source = "git+https://github.com/kryptocorelabs/vault-source?rev=2e7fbc92cb3f373f764fbe2622d4c87f14ceb32b#2e7fbc92cb3f373f764fbe2622d4c87f14ceb32b"
+source = "git+https://github.com/kryptocorelabs/vault-source?rev=778b7e22c959b5e209a5b97c35f797c6c47faa9f#778b7e22c959b5e209a5b97c35f797c6c47faa9f"
 dependencies = [
  "getrandom 0.3.4",
  "kryptocore",

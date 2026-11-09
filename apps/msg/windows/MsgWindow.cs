@@ -426,6 +426,7 @@ internal sealed class MsgWindow : Shell
         bool folderReady = false;
         long? downloadId = null;
         string downloadName = "";
+        bool downloadNeedsConfirmation = false, downloadHasFolder = false;
         long downloadSize = 0;
         MsgPrompt? downloadPrompt = null;
         bool writing = false;
@@ -464,7 +465,11 @@ internal sealed class MsgWindow : Shell
 
         var downloadPanel = Section("Datei erhalten", "");
         var downloadInfo = (TextBlock)downloadPanel.Children[1];
+        const string saveInFolderLabel = "Im Empfangsordner speichern";
+        const string attachmentWarning = "Diese Datei kann beim Öffnen Programme oder Skripte starten oder Einstellungen ändern. Speichere sie nur, wenn du sie erwartet hast.";
+        var saveInFolder = Button(saveInFolderLabel, async () => await SaveInFolder());
         downloadPanel.Children.Add(Row(
+            saveInFolder,
             Button("Speichern unter …", async () => await SaveDownload(false)),
             Button("Ordner wählen …", async () => await SaveDownload(true)),
             Button("Ablehnen", async () =>
@@ -475,6 +480,12 @@ internal sealed class MsgWindow : Shell
         downloadCard.Visibility = Visibility.Collapsed;
         downloadCard.Margin = new Thickness(0, 8, 0, 8);
         chat.Children.Add(downloadCard);
+
+        async Task SaveInFolder()
+        {
+            if (downloadNeedsConfirmation && downloadHasFolder && downloadId is { } id)
+                await WriteCommand(new { kind = "save_in_folder", id });
+        }
 
         async Task SaveDownload(bool folder)
         {
@@ -501,16 +512,20 @@ internal sealed class MsgWindow : Shell
         {
             if (!ReferenceEquals(chatSession, session) || session.IsCancellationRequested || downloadId != id || downloadPrompt is not null)
                 return;
-            var shown = new MsgPrompt(this, "Datei erhalten",
-                $"{downloadName} · {downloadSize / 1024.0:N1} KiB\n\nWo möchtest du die Datei speichern?",
-                "Speichern unter …", "Ordner wählen …", "Ablehnen");
+            bool useReceiveFolder = downloadNeedsConfirmation && downloadHasFolder;
+            string question = downloadNeedsConfirmation ? attachmentWarning : "Wo möchtest du die Datei speichern?";
+            var shown = new MsgPrompt(this, downloadNeedsConfirmation ? "Potenziell ausführbare Datei" : "Datei erhalten",
+                $"{downloadName} · {downloadSize / 1024.0:N1} KiB\n\n{question}",
+                useReceiveFolder ? saveInFolderLabel : "Speichern unter …",
+                useReceiveFolder ? "Speichern unter …" : "Ordner wählen …", "Ablehnen");
             downloadPrompt = shown;
             shown.Display();
             var choice = await shown.Result;
             if (ReferenceEquals(downloadPrompt, shown)) downloadPrompt = null;
             if (!ReferenceEquals(chatSession, session) || session.IsCancellationRequested || downloadId != id) return;
-            if (choice == PromptChoice.First) await SaveDownload(false);
-            else if (choice == PromptChoice.Second) await SaveDownload(true);
+            if (choice == PromptChoice.First && useReceiveFolder) await SaveInFolder();
+            else if (choice is PromptChoice.First or PromptChoice.Second)
+                await SaveDownload(choice == PromptChoice.Second && !useReceiveFolder);
             else if (choice == PromptChoice.Third) await WriteCommand(new { kind = "reject_download", id });
         }
 
@@ -599,7 +614,12 @@ internal sealed class MsgWindow : Shell
                             downloadId = frame.GetProperty("id").GetInt64();
                             downloadName = frame.GetProperty("name").GetString()!;
                             downloadSize = frame.GetProperty("size").GetInt64();
-                            downloadInfo.Text = $"{downloadName} · {downloadSize / 1024.0:N1} KiB";
+                            downloadNeedsConfirmation = frame.GetProperty("confirm").GetBoolean();
+                            downloadHasFolder = frame.GetProperty("has_folder").GetBoolean();
+                            saveInFolder.Visibility = downloadNeedsConfirmation && downloadHasFolder
+                                ? Visibility.Visible : Visibility.Collapsed;
+                            downloadInfo.Text = $"{downloadName} · {downloadSize / 1024.0:N1} KiB" +
+                                (downloadNeedsConfirmation ? $"\n{attachmentWarning}" : "");
                             long offeredId = downloadId.Value;
                             Dispatcher.BeginInvoke(new Action(() => _ = ShowDownload(session, offeredId)));
                             break;
@@ -895,7 +915,7 @@ internal sealed class MsgWindow : Shell
                 : localStatus ? "Deine Zustimmung ist da. Die Anzeige wartet auf die andere Person."
                 : "Wollt ihr den Online-Status teilen? Die Anzeige erscheint erst, wenn ihr beide zustimmt.";
             availability.Foreground = Brush(localStatus && peerStatus ? "Mint" : "Muted");
-            folderState.Text = folderReady ? "Empfangsordner bereit · Dateien bis 16 MiB."
+            folderState.Text = folderReady ? "Empfangsordner bereit · Ausführbare Dateien brauchen eine Bestätigung."
                 : "Eingehende Dateien fragen nach einem Speicherort · bis 16 MiB.";
             receiveFolder.IsEnabled = ready && !writing;
             downloadCard.Visibility = ready && downloadId is not null ? Visibility.Visible : Visibility.Collapsed;

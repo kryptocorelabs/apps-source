@@ -11,6 +11,7 @@ pub enum Format {
     EmbeddedContainerV1,
     MsgIdentityV1,
     MsgStoreV1,
+    MsgStoreV2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +81,14 @@ pub(crate) fn identify(header: &[u8]) -> Option<Descriptor> {
             (
                 MsgStoreV1,
                 "MSG sidecar / KCMB v1",
+                48,
+                64 * 1024 + 48,
+                &[IdentityAndPassword],
+            )
+        } else if header.starts_with(b"KCMB\0\0\0\x02") {
+            (
+                MsgStoreV2,
+                "MSG sidecar / KCMB v2",
                 48,
                 64 * 1024 + 48,
                 &[IdentityAndPassword],

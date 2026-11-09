@@ -6,25 +6,28 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const HEADER: &[u8; 8] = b"KCMB\0\0\0\x01";
+const LEGACY_HEADER: &[u8; 8] = b"KCMB\0\0\0\x01";
+const HEADER: &[u8; 8] = b"KCMB\0\0\0\x02";
 const LIMIT: usize = 64 * 1024;
 
-pub struct ContactBook {
+pub struct ContactBook<'a> {
     path: PathBuf,
     key: kryptocore::Key,
+    identity: &'a Identity,
+    legacy_salt: &'static kryptocore::Salt,
     _lock: File,
 }
 
-impl ContactBook {
-    pub fn open(identity_path: &Path, identity: &Identity) -> Result<Self> {
+impl<'a> ContactBook<'a> {
+    pub fn open(identity_path: &Path, identity: &'a Identity) -> Result<Self> {
         Self::open_store(identity_path, identity, ".contacts", b"KCMB v1 contacts")
     }
 
-    pub fn blocked(identity_path: &Path, identity: &Identity) -> Result<Self> {
+    pub fn blocked(identity_path: &Path, identity: &'a Identity) -> Result<Self> {
         Self::open_store(identity_path, identity, ".blocked", b"KCMB v1 blocked!")
     }
 
-    pub fn verification(identity_path: &Path, identity: &Identity) -> Result<Self> {
+    pub fn verification(identity_path: &Path, identity: &'a Identity) -> Result<Self> {
         Self::open_store(
             identity_path,
             identity,
@@ -33,7 +36,7 @@ impl ContactBook {
         )
     }
 
-    pub fn require_two_codes(identity_path: &Path, identity: &Identity) -> Result<bool> {
+    pub fn require_two_codes(identity_path: &Path, identity: &'a Identity) -> Result<bool> {
         let mut path = identity_path.as_os_str().to_owned();
         path.push(".policy");
         match std::fs::symlink_metadata(Path::new(&path)) {
@@ -51,7 +54,7 @@ impl ContactBook {
 
     pub fn set_require_two_codes(
         identity_path: &Path,
-        identity: &Identity,
+        identity: &'a Identity,
         required: bool,
     ) -> Result<()> {
         let store = Self::open_store(identity_path, identity, ".policy", b"KCMB v1 settings")?;
@@ -60,9 +63,9 @@ impl ContactBook {
 
     fn open_store(
         identity_path: &Path,
-        identity: &Identity,
+        identity: &'a Identity,
         suffix: &str,
-        salt: &kryptocore::Salt,
+        legacy_salt: &'static kryptocore::Salt,
     ) -> Result<Self> {
         let mut path = identity_path.as_os_str().to_owned();
         path.push(suffix);
@@ -75,10 +78,15 @@ impl ContactBook {
             .truncate(false)
             .open(lock_path)?;
         lock.lock()?;
-        let key = kryptocore::derive_key(&identity.0[..], salt).map_err(|_| Error::Identity)?;
+        let context =
+            kryptocore::Context::new("org.kryptocorelabs.msg", 2, "sidecar-key", legacy_salt)
+                .map_err(|_| Error::Identity)?;
+        let key = kryptocore::Key::from_bytes(&identity.0).derive_subkey(&context);
         Ok(Self {
             path: path.into(),
             key,
+            identity,
+            legacy_salt,
             _lock: lock,
         })
     }
@@ -93,11 +101,24 @@ impl ContactBook {
         };
         let mut data = Vec::new();
         file.take((LIMIT + 49) as u64).read_to_end(&mut data)?;
-        if !(48..=LIMIT + 48).contains(&data.len()) || !data.starts_with(HEADER) {
+        if !(48..=LIMIT + 48).contains(&data.len()) {
             return Err(Error::Identity);
         }
         let nonce = data[8..32].try_into().map_err(|_| Error::Identity)?;
-        kryptocore::decrypt(&self.key, nonce, &data[32..], HEADER).map_err(|_| Error::Identity)
+        if data.starts_with(HEADER) {
+            return kryptocore::decrypt(&self.key, nonce, &data[32..], HEADER)
+                .map_err(|_| Error::Identity);
+        }
+        if !data.starts_with(LEGACY_HEADER) {
+            return Err(Error::Identity);
+        }
+        let legacy_key = kryptocore::derive_key(&self.identity.0[..], self.legacy_salt)
+            .map_err(|_| Error::Identity)?;
+        let plaintext = kryptocore::decrypt(&legacy_key, nonce, &data[32..], LEGACY_HEADER)
+            .map_err(|_| Error::Identity)?;
+        // Keep a readable legacy store usable if its directory cannot be updated.
+        let _ = self.write(&plaintext);
+        Ok(plaintext)
     }
 
     pub fn write(&self, contents: &[u8]) -> Result<()> {

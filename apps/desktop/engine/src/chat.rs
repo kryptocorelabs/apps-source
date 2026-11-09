@@ -24,6 +24,7 @@ enum Command {
     Status { enabled: bool },
     SaveDownload { id: u64, path: PathBuf },
     DownloadFolder { id: u64, path: PathBuf },
+    SaveInFolder { id: u64 },
     RejectDownload { id: u64 },
 }
 
@@ -50,6 +51,29 @@ struct Download {
     id: u64,
     name: String,
     bytes: Zeroizing<Vec<u8>>,
+}
+
+pub(super) fn requires_attachment_confirmation(name: &str, bytes: &[u8]) -> bool {
+    // Recognize common executable signatures even when the sender renamed the file.
+    if bytes.starts_with(b"MZ") || bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"#!") {
+        return true;
+    }
+    let Some((_, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        // Programs, libraries, and installers.
+        "exe" | "com" | "scr" | "dll" | "ocx" | "cpl" | "sys" | "msi" | "msp" | "msix"
+            | "msixbundle" | "appx" | "appxbundle" | "appinstaller" | "app" | "apk" | "jar"
+            // Scripts and script containers.
+            | "bat" | "cmd" | "ps1" | "psm1" | "psd1" | "psc1" | "vbs" | "vbe" | "js"
+            | "jse" | "mjs" | "wsf" | "wsh" | "wsc" | "sct" | "hta" | "sh" | "bash"
+            | "ksh" | "zsh" | "py" | "pyw"
+            // Launchers, shortcuts, and files that can change the system.
+            | "lnk" | "url" | "pif" | "scf" | "application" | "appref-ms" | "chm"
+            | "jnlp" | "msc" | "reg" | "inf" | "settingcontent-ms" | "search-ms" | "library-ms"
+    )
 }
 
 fn read_channel(
@@ -92,7 +116,9 @@ fn read_channel(
         if attachment.as_ref().is_some_and(|file| file.remaining == 0) {
             let file = attachment.take().ok_or(msg::Error::Protocol)?;
             let selected = folder.lock().map_err(|_| msg::Error::Protocol)?.clone();
-            let saved = selected.and_then(|folder| msg::save_received_file(&folder, &file.name, &file.bytes).ok());
+            let confirm = requires_attachment_confirmation(&file.name, &file.bytes);
+            let saved = selected.as_ref().filter(|_| !confirm)
+                .and_then(|folder| msg::save_received_file(folder, &file.name, &file.bytes).ok());
             if let Some(path) = saved {
                 emit(&json!({ "event": "chat_file", "saved_file": path, "message": "Datei gespeichert." }))?;
                 channel.receipt(true)?;
@@ -103,11 +129,19 @@ fn read_channel(
                 let name = file.name.clone();
                 *download.lock().map_err(|_| msg::Error::Protocol)? =
                     Some(Download { id, name: file.name, bytes: file.bytes });
-                emit(&json!({ "event": "chat_download", "id": id, "name": name, "size": size }))?;
+                emit(&json!({ "event": "chat_download", "id": id, "name": name, "size": size,
+                    "confirm": confirm, "has_folder": selected.is_some() }))?;
             }
         }
         Ok(())
     })
+}
+
+enum DownloadDestination {
+    File(PathBuf),
+    NewFolder(PathBuf),
+    SelectedFolder,
+    Reject,
 }
 
 fn save_download(
@@ -115,19 +149,30 @@ fn save_download(
     download: &Mutex<Option<Download>>,
     folder: &Mutex<Option<PathBuf>>,
     id: u64,
-    path: Option<PathBuf>,
-    use_folder: bool,
+    destination: DownloadDestination,
 ) -> Result<(), msg::Error> {
     let mut pending = download.lock().map_err(|_| msg::Error::Protocol)?;
     let Some(file) = pending.as_ref().filter(|file| file.id == id) else {
         emit(&json!({ "event": "chat_download_expired", "id": id }))?;
         return Ok(());
     };
-    let Some(path) = path else {
-        pending.take();
-        channel.receipt(false)?;
-        emit(&json!({ "event": "chat_download_closed", "id": id }))?;
-        return Ok(());
+    let (path, use_folder, remember) = match destination {
+        DownloadDestination::File(path) => (path, false, false),
+        DownloadDestination::NewFolder(path) => (path, true, true),
+        DownloadDestination::SelectedFolder => {
+            let Some(path) = folder.lock().map_err(|_| msg::Error::Protocol)?.clone() else {
+                emit(&json!({ "event": "chat_download_error", "id": id,
+                    "message": "Wähle zuerst einen Empfangsordner." }))?;
+                return Ok(());
+            };
+            (path, true, false)
+        }
+        DownloadDestination::Reject => {
+            pending.take();
+            channel.receipt(false)?;
+            emit(&json!({ "event": "chat_download_closed", "id": id }))?;
+            return Ok(());
+        }
     };
     if !path.is_absolute() {
         emit(
@@ -142,7 +187,7 @@ fn save_download(
     };
     match saved {
         Ok(saved) => {
-            if use_folder {
+            if remember {
                 *folder.lock().map_err(|_| msg::Error::Protocol)? = Some(path);
                 emit_progress(true, "chat_folder");
             }
@@ -265,15 +310,19 @@ pub(super) fn run(
             let command = serde_json::from_slice(&frame).map_err(|_| msg::Error::Protocol)?;
             let sent = match command {
                 Command::SaveDownload { id, path } => {
-                    save_download(&channel, &download, &folder, id, Some(path), false)?;
+                    save_download(&channel, &download, &folder, id, DownloadDestination::File(path))?;
                     continue;
                 }
                 Command::DownloadFolder { id, path } => {
-                    save_download(&channel, &download, &folder, id, Some(path), true)?;
+                    save_download(&channel, &download, &folder, id, DownloadDestination::NewFolder(path))?;
+                    continue;
+                }
+                Command::SaveInFolder { id } => {
+                    save_download(&channel, &download, &folder, id, DownloadDestination::SelectedFolder)?;
                     continue;
                 }
                 Command::RejectDownload { id } => {
-                    save_download(&channel, &download, &folder, id, None, false)?;
+                    save_download(&channel, &download, &folder, id, DownloadDestination::Reject)?;
                     continue;
                 }
                 Command::Folder { path } if path.is_absolute() && path.is_dir() => {

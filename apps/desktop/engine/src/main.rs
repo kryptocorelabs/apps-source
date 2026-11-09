@@ -446,6 +446,10 @@ fn listen_for_peer(
                                 Zeroizing::new(message.to_owned()),
                             ),
                             msg::Incoming::File { name, bytes } => {
+                                if chat::requires_attachment_confirmation(name, bytes) {
+                                    save_error = Some("Diese Datei muss im offenen Chat ausdrücklich bestätigt werden.");
+                                    return Err(io::ErrorKind::PermissionDenied.into());
+                                }
                                 let folder = folder.ok_or(io::ErrorKind::InvalidInput)?;
                                 let path = msg::save_received_file(folder, name, bytes).inspect_err(|error| {
                                 save_error = Some(if error.kind() == io::ErrorKind::AlreadyExists {

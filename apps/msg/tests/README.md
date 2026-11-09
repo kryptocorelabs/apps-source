@@ -13,7 +13,8 @@ python apps/msg/tests/chat_downloads.py
 The Python test currently targets the Windows engine at
 `target/release/kryptocore-desktop-engine.exe`. It starts two loopback peers
 and checks replies, a missing receive folder, save-as, filename collisions,
-stale download decisions, rejection, remembered folders and empty files.
+stale download decisions, rejection, executable confirmation with a selected
+folder, remembered folders and empty files.
 
 ## Windows interface and live Tor
 

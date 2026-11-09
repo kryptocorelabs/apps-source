@@ -115,10 +115,22 @@ other saved rows do not claim that the other person is online. Presence
 sharing remains an explicit choice for both participants.
 
 The encrypted contact list is stored beside the identity as `.kcmi.contacts`.
-The `.kcmi.verification` and `.kcmi.blocked` sidecars hold comparison metadata
-and blocked keys. Back up the identity and its sidecars together. Missing
-comparison metadata displays contacts as not compared. Existing contact
-records retain their file format. Lock files coordinate edits.
+The `.kcmi.verification`, `.kcmi.blocked` and `.kcmi.policy` sidecars hold key
+comparisons, blocked contacts and settings. Back up the identity and its
+sidecars together. Missing comparison metadata displays contacts as not
+compared. Lock files coordinate edits.
+
+New sidecars use KCMB v2. Core's HKDF-SHA-256 profile derives a separate key
+for each store from the random identity secret. It uses the application
+`org.kryptocorelabs.msg`, version `2`, purpose `sidecar-key`, and the 16-byte
+store identifier as context metadata. The identifiers are `KCMB v1 contacts`,
+`KCMB v1 blocked!`, `KCMB v1 verify!!` and `KCMB v1 settings` respectively.
+The existing record layout authenticates the eight-byte header with version
+`2`. The password that unlocks the identity still uses Argon2id.
+
+When MSG successfully opens a v1 sidecar, it attempts to replace it atomically
+with v2. If the directory is read-only, it can still read the v1 data. Keep a
+backup before switching versions if you plan to return to an older MSG build.
 
 Under **Einstellungen → Kontakte & Freigaben**, you can require a mutual
 exchange of two codes. This setting is saved for the identity and disables
@@ -137,13 +149,19 @@ or **Ablehnen**. Choosing a folder also sets it for subsequent files in the
 current chat; these use an `MSG-` filename prefix. Save-as uses the selected
 name. Existing files are never replaced.
 
+Messenger asks before saving potentially executable attachments, including
+programs, scripts and shortcuts. The prompt offers the selected receive folder
+when available. Each such attachment requires its own decision. Messenger checks
+common filename extensions and file signatures. Use your usual malware scanner
+before opening an unexpected attachment.
+
 While waiting for a decision, one incoming attachment remains in bounded
 memory and the chat can receive and answer messages. Closing the popup or
 cancelling a save picker leaves an inline save offer. A failed save retains
 the offer for retry. Closing or locking the chat discards unsaved data.
 A receipt confirms that the other app accepted the message or saved the
-attachment. An unconfirmed transfer may have arrived. Automatic saving to
-a chosen folder does not scan files for malware or open them.
+attachment. An unconfirmed transfer may have arrived. Messenger leaves saved
+files closed.
 
 ## Tor and direct connections
 
