@@ -54,6 +54,14 @@ jobs:
           $artifacts = Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY/artifacts"
           python apps/rescue/package-windows-preview.py --executable (Join-Path $artifacts 'KryptoCore-Rescue.exe') --output-dir $artifacts --dotnet-runtime '10.0.14'
           if ($LASTEXITCODE -ne 0) { throw 'Rescue release packaging failed.' }
+      - name: Test bundled Tor and DPAPI onion key migration offline
+        shell: pwsh
+        env:
+          BUILD_COPY: ${{ matrix.copy }}
+        run: |
+          $executable = Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY/artifacts/KryptoCore-MSG.exe"
+          $test = Start-Process -FilePath $executable -ArgumentList '--verify-tor-offline' -Wait -PassThru -WindowStyle Hidden
+          if ($test.ExitCode -ne 0) { throw "Bundled Tor offline self-test failed (exit code $($test.ExitCode))." }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-build-${{ matrix.copy }}

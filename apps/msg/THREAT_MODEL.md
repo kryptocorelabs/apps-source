@@ -42,6 +42,24 @@ messages, drafts and codes. WPF, runtime, OS, clipboard, crash-dump and swap
 copies can outlive these references. The app writes no persistent chat
 history. A deliberately saved attachment is plaintext on disk.
 
+## Windows onion service key storage
+
+The onion service key is separate from the MSG identity key. Messenger uses
+DPAPI with the current Windows user scope to protect the service key at rest.
+It provides the key to Tor over the authenticated loopback control connection
+using `ADD_ONION`. Tor holds the service key in memory for that session.
+The public onion address and the service selection file can remain readable.
+[Microsoft DPAPI documentation](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) ·
+[Tor control specification](https://spec.torproject.org/control-spec/commands.html#add_onion)
+
+Migration stores and verifies the protected copy before removing a legacy
+plaintext key. A damaged protected copy stops startup for that address. Backups,
+snapshots and deleted-file remnants may still hold earlier plaintext copies.
+DPAPI raises the bar for someone who obtains only the key file. Processes
+running as the same Windows user can request decryption. Privileged attackers,
+memory inspection and restoring older valid profile data remain within the
+existing local trust boundary.
+
 ## Dependencies and evidence
 
 Snow implements the Noise profiles. Tor provides the onion route and local SOCKS
@@ -54,7 +72,9 @@ key generation uses OS randomness.
 Rust tests exercise unknown peer keys, missing ready confirmations, tampered,
 reordered and truncated frames, and identity-bound store migration. Windows
 tests cover connection indication, cancellation, locking and attachment
-decisions. Report suspected vulnerabilities through the [security policy](../../SECURITY.md).
+decisions. The offline packaged Tor check covers fresh protected keys,
+restart, rotation, legacy migration and rejection of a damaged key.
+Report suspected vulnerabilities through the [security policy](../../SECURITY.md).
 
 [Noise specification](https://noiseprotocol.org/noise.html) ·
 [Tor onion services](https://community.torproject.org/onion-services/overview/)

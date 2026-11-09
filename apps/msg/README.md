@@ -171,11 +171,18 @@ files closed.
 
 ## Tor and direct connections
 
-The single-file Windows build includes Tor. Its service keys are kept
-under `%LOCALAPPDATA%\KryptoCore\MSG`. The active onion address survives
-restarts and public IP changes. **Einstellungen → Neue Tor-Adresse
-erstellen** rotates it. Contacts then need the updated address or a fresh
-invitation. Protect this folder and your backups.
+The single-file Windows build includes Tor. Messenger protects its onion
+service keys with Windows DPAPI for the current user and stores the encrypted
+files under `%LOCALAPPDATA%\KryptoCore\MSG`. The first successful startup
+migrates keys from earlier Windows builds and keeps the current onion address.
+Older builds cannot use the protected keys. Earlier backups may still contain
+readable keys. Restoring an onion address from a protected copy normally
+requires the original Windows profile. If that profile is lost, create a
+new address and share it with your contacts.
+
+The active onion address survives restarts and public IP changes.
+**Einstellungen → Neue Tor-Adresse erstellen** rotates it. Contacts then
+need the updated address or a fresh invitation.
 
 Use one Tor-mode MSG window per Windows user profile. Tor needs outbound
 network access. Use **Tor starten und prüfen** under **Einstellungen** to
