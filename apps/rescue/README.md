@@ -3,8 +3,9 @@
 Offline file inspection and authenticated recovery exports. Built on the
 open-source [KryptoCore](https://github.com/kryptocorelabs/kryptocore) library.
 
-**Preview 0.1.0-preview.3.** Use working copies and retain independent backups.
-The Windows executable is unsigned and has not received an independent audit.
+**Preview 0.1.0-preview.4.** Use working copies and retain independent backups.
+The ZIP and its EXE have GitHub build attestations. Windows Authenticode and
+independent audit are pending.
 
 Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
 and through automated CI. No independent security audit has been completed.
@@ -20,7 +21,7 @@ privately through the project's security-reporting channel.
 | --- | --- | --- |
 | Vault KCV1 | Authenticate and export login records as a new JSON file. | Vault password. |
 | Vault KCV2 | Same export, using either existing access slot. | Vault password or previously configured recovery key. |
-| Vault KCV3 (unreleased) | Same read-only export; no claim that a backup is current. Published preview.3 lacks this reader. | Password or matching recovery key. |
+| Vault KCV3/KCV4 | Same read-only export, including older authentic backups. | Password or matching recovery key. |
 | Vault KCV4 (development) | Authenticate, check or export through the same shared format crate as Vault. | Password or matching recovery key. |
 | Container KCC v1 | Authenticate the complete archive and extract into a new folder. | Container passphrase. |
 | Embedded KCC in an EXE | Read the payload as data and extract into a new folder. The EXE is never launched. | Container passphrase. |
@@ -41,7 +42,7 @@ count. This check creates no plaintext file and accepts authentic older copies.
 
 ## Windows quick start
 
-1. Download and extract the [preview ZIP](https://github.com/kryptocorelabs/rescue/releases/tag/v0.1.0-preview.3).
+1. Download and extract the [preview ZIP](https://github.com/kryptocorelabs/rescue/releases/tag/v0.1.0-preview.4).
 2. Run **KryptoCore-Rescue.exe**. No separate Python or .NET installation is needed.
 3. Choose **Datei auswählen …** and check the recognized format.
 4. Select **Passwort** or **Wiederherstellungsschlüssel** where supported and enter the existing credential.
