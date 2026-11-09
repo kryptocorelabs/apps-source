@@ -44,13 +44,5 @@ lowercase ASCII hexadecimal digits of SHA-256 over the entire KCC file,
 without a newline. Signer trust is configured independently of the archive.
 The same bytes are hashed and decrypted during signed extraction.
 
-Threats in scope include copied archives, offline guessing, malicious file
-paths, truncation and modification in transit. Passphrase entropy determines
-resistance to offline guessing. The tool assumes a trusted OS, tools, and
-private local directories. It does not prevent resource exhaustion from
-large valid archives or many concurrent operations. Extraction uses a
-private staging folder and reserves a new destination only after
-authentication, optional signature verification and optional inspection.
-Moving multiple authenticated roots is not a single atomic operation: a
-crash at this stage may leave part of an authenticated export. No
-independent security audit or stable compatibility promise exists yet.
+See the [Container threat model](THREAT_MODEL.md) for extraction guarantees,
+trust assumptions and the boundary between authentication and file safety.

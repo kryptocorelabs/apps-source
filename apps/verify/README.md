@@ -64,9 +64,6 @@ learned through a trusted route; this tool does not maintain an automatic update
 database, revocation service or threshold trust root. It is not an implementation
 of [TUF](https://theupdateframework.github.io/specification/latest/).
 
-A valid signature means that the checked bytes match a release authorized by
-the selected key and metadata. It does not prove absence of malware, prevent
-replacement after verification, or replace Windows Authenticode, SmartScreen,
-Apple Developer ID/notarization or an independent audit. Do not auto-run files
-after a check. Report suspected vulnerabilities privately through the source
-repository's [security policy](../../SECURITY.md).
+See the [Verify threat model](THREAT_MODEL.md) for what a successful check
+establishes and where trust in the publisher, verifier and local machine enters.
+Report suspected vulnerabilities through the [security policy](../../SECURITY.md).

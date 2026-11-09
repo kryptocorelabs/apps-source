@@ -107,7 +107,10 @@ fn mutations_and_failed_scan_never_publish_plaintext() {
     let temp = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temp.path()).unwrap();
     let source = root.join("document");
-    fs::write(&source, vec![13; CHUNK + 32]).unwrap();
+    let contents: Vec<_> = (0..2 * CHUNK + 32)
+        .map(|offset| (offset / CHUNK) as u8)
+        .collect();
+    fs::write(&source, contents).unwrap();
     let archive = root.join("test.kcc");
     pack(&archive, &[source.clone()], PASS).unwrap();
     let original = fs::read(&archive).unwrap();
@@ -149,6 +152,16 @@ fn mutations_and_failed_scan_never_publish_plaintext() {
     ] {
         variants.push(original[..end].to_vec());
     }
+    // Swap two complete data frames of equal length. Framing remains valid,
+    // so rejection depends on authenticating the frame position.
+    let entry_bytes = 5 + 9 + "document".len() + TAG;
+    let frame_bytes = 5 + CHUNK + TAG;
+    let first = HEADER + entry_bytes;
+    let second = first + frame_bytes;
+    let end = second + frame_bytes;
+    let mut reordered = original.clone();
+    reordered[first..second].copy_from_slice(&original[second..end]);
+    reordered[second..end].copy_from_slice(&original[first..second]);
     // Equal-length frames also cannot be copied from a separately encrypted container.
     let other = root.join("other.kcc");
     pack(&other, &[root.join("document")], PASS).unwrap();
@@ -158,6 +171,12 @@ fn mutations_and_failed_scan_never_publish_plaintext() {
     variants.push(spliced);
 
     let corrupt = root.join("bad.kcc");
+    fs::write(&corrupt, reordered).unwrap();
+    assert!(matches!(
+        unpack(&corrupt, &output, PASS),
+        Err(Error::Authentication)
+    ));
+    assert!(!output.exists());
     for (index, mutation) in variants.iter().enumerate() {
         fs::write(&corrupt, mutation).unwrap();
         assert!(unpack(&corrupt, &output, PASS).is_err(), "mutation {index}");
@@ -179,7 +198,10 @@ fn even_authenticated_unsafe_names_are_rejected() {
     let destination = root.join("out");
     for names in [
         vec![(false, "../escaped")],
+        vec![(true, "safe"), (false, "safe/../../escaped")],
+        vec![(true, "safe"), (false, r"safe\..\escaped")],
         vec![(false, "/absolute")],
+        vec![(false, r"\\host\share\file")],
         vec![(false, r"C:\root")],
         vec![(false, "file:stream")],
         vec![(false, "NUL.txt")],
@@ -203,6 +225,28 @@ fn even_authenticated_unsafe_names_are_rejected() {
         assert!(unpack(&archive, &destination, PASS).is_err());
         assert!(!destination.exists());
         assert!(!root.join("escaped").exists());
+    }
+}
+
+#[test]
+fn unsafe_components_remain_invalid_between_valid_components() {
+    for parent in ["docs", "Grüße", "目录"] {
+        for child in ["file", "report.txt", "摘要"] {
+            let mut entries = Entries::default();
+            entries.add(parent, true, 0).unwrap();
+            for component in ["", ".", "..", "NUL.txt", "drive:", "trail.", r"..\escape"] {
+                let path = format!("{parent}/{component}/{child}");
+                assert!(entries.add(&path, false, 1).is_err(), "{path}");
+            }
+            entries.add(&format!("{parent}/{child}"), false, 1).unwrap();
+            assert_eq!(
+                entries.summary,
+                Summary {
+                    entries: 2,
+                    bytes: 1
+                }
+            );
+        }
     }
 }
 

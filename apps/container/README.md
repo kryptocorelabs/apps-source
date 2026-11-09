@@ -14,19 +14,19 @@ open future containers with a double-click. Enter the passphrase and press
 Enter to extract into the suggested folder. You can change the destination
 before extracting. You can also drop a `.kcc` file onto the executable.
 
-To send a single file that opens itself, select **Selbstöffnende Windows-EXE**
-before saving. The export includes the portable Windows x64 opener and the
-encrypted KCC payload. The recipient double-clicks the EXE, enters the
-passphrase and chooses where to extract. Share the passphrase separately.
-The generated EXE is unsigned. Open an executable only if you trust its
-source. Windows or a file-sharing service may restrict executable files.
+Use `.kcc` for routine transfers and share the passphrase separately.
+The optional **Erweiterter Export** creates a self-extracting Windows EXE.
+Use it only in controlled workflows where the recipient can verify the whole
+file before execution. The generated EXE is unsigned and launches an embedded
+opener. Rescue can read the payload as data without launching the EXE.
+See the [Container threat model](THREAT_MODEL.md).
 
 After saving, choose **Prüfsumme kopieren** to copy the SHA-256 digest of the
 complete file. Share the digest through a separate, trusted channel. The
 recipient can compare it in PowerShell before opening the file.
 
 ```powershell
-(Get-FileHash -LiteralPath '.\Delivery.exe' -Algorithm SHA256).Hash
+(Get-FileHash -LiteralPath '.\Delivery.kcc' -Algorithm SHA256).Hash
 ```
 
 Compare every character and open the file only if the digests match. A
@@ -97,7 +97,7 @@ plaintext; removing a temporary directory is not secure erasure.
 The format supports up to 1 TiB of plaintext and 10,000 entries, with fixed
 memory per data chunk. This is a format limit, not a performance claim. Names
 are encrypted; file structure and sizes can be inferred from frame sizes.
-See [format and security boundaries](FORMAT.md).
+See the [file format](FORMAT.md) and [threat model](THREAT_MODEL.md).
 
 Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
 and through automated CI. No independent security audit has been completed.

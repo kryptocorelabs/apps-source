@@ -14,5 +14,5 @@ These are previews, tested by maintainers and automated checks. No independent
 security audit yet. Community review is welcome.
 
 [Recovery if an app stops working](https://github.com/kryptocorelabs/kryptocore/blob/main/RESCUE-FIRST.md)
-· [Technical boundaries](https://github.com/kryptocorelabs/kryptocore/blob/main/THREAT_MODEL.md)
-· [Private security reports](https://github.com/kryptocorelabs/kryptocore/security/advisories/new)
+· [Threat models by application](README.md)
+· [Private security reports](SECURITY.md)

@@ -16,13 +16,14 @@ We welcome community testing, code reviews and scrutiny of our security
 assumptions. Please use synthetic data and report suspected vulnerabilities
 privately through the project's security-reporting channel.
 
-| Project | Source and build guide | User downloads |
-| --- | --- | --- |
-| MSG | [apps/msg](apps/msg/README.md) | [MSG](https://github.com/kryptocorelabs/msg) |
-| Container | [apps/container](apps/container/README.md) | [Container](https://github.com/kryptocorelabs/container) |
-| Rescue | [apps/rescue](apps/rescue/README.md) | [Rescue](https://github.com/kryptocorelabs/rescue) |
-| Verify | [apps/verify](apps/verify/README.md) | Native CI artifacts and a published release-verification key |
-| Shared Windows UI/worker | [apps/desktop](apps/desktop/README.md) | Included in the app packages |
+| Project | Source and build guide | Threat model | User downloads |
+| --- | --- | --- | --- |
+| MSG (experimental) | [apps/msg](apps/msg/README.md) | [Messenger](apps/msg/THREAT_MODEL.md) | [MSG](https://github.com/kryptocorelabs/msg) |
+| Container | [apps/container](apps/container/README.md) | [Container](apps/container/THREAT_MODEL.md) | [Container](https://github.com/kryptocorelabs/container) |
+| Rescue | [apps/rescue](apps/rescue/README.md) | [Rescue](apps/rescue/THREAT_MODEL.md) | [Rescue](https://github.com/kryptocorelabs/rescue) |
+| Verify | [apps/verify](apps/verify/README.md) | [Verify](apps/verify/THREAT_MODEL.md) | Native CI artifacts and a published release-verification key |
+
+The [shared Windows UI and worker](apps/desktop/README.md) are included in the app packages.
 
 Vault and Firefox sources are in the separate
 [vault-source](https://github.com/kryptocorelabs/vault-source) workspace.

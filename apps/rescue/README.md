@@ -32,6 +32,8 @@ human identity or make files safe to execute. Optional shared sender-signature
 checks and local ClamAV scanning are separate choices; OpenSSH verification
 is still handled by Container. Unknown formats and unsupported versions are rejected.
 
+See the [Rescue threat model](THREAT_MODEL.md) for recovery and output boundaries.
+
 In current source builds, choose **Vault-Sicherung prüfen** after selecting a
 Vault backup and entering its password or configured recovery key. Rescue
 authenticates and parses the backup in memory, then shows the readable entry

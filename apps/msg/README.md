@@ -1,7 +1,12 @@
 # KryptoCore MSG
 
-MSG opens an encrypted chat channel for messages and files. Both people must
-be online. The Windows app includes Tor and starts it when needed.
+**Experimental preview.** MSG opens an encrypted chat channel for messages
+and files. Both people must be online. The Windows app includes Tor and starts
+it when needed. Use synthetic data while evaluating this preview.
+
+Development is focused on stabilizing one-to-one chat, invitations and
+attachments. The preview keeps the existing protocol and store versions while
+this work is underway. See the [scope and threat model](THREAT_MODEL.md).
 
 The Windows development interface follows the supplied GetMusic 3.11 Aura
 visual reference: muted blue surfaces, mint accents, rounded panels and a
@@ -199,49 +204,8 @@ An idle or broken network link can take time to report failure. The marker
 describes the established cryptographic channel, not a continuous online
 probe or a guarantee about the peer's device or real-world identity.
 
-The Rust tests reject unknown peer keys, absent or corrupt encrypted ready
-confirmations and tampered message ciphertext. Windows integration checks
-also reject a saved-key mismatch and verify the marker before connection,
-after confirmation and after local cancellation/locking.
-
-- Chat uses Noise KK through Snow with fresh ephemeral keys and the
-  `KryptoCore MSG chat v1` context. Both peers pin the selected MSG key.
-  An encrypted confirmation in each direction precedes the connected state.
-- Invitations use Noise IKpsk1, a random 32-byte secret and their own
-  protocol context. No invitation secret is required for address-only
-  requests because the receiver approves each new request.
-- Address-only requests use a separate Noise XN context and onion port
-  49426. Normal chat and invitations use port 49424. The command-line
-  presence protocol remains on 49425.
-- Identity files retain the KCMI v1 format. Argon2id and authenticated
-  encryption protect the private identity key. Rust uses zeroizing storage
-  for key material. Windows holds the unlock passphrase in a SecureString
-  during the unlocked session and disposes it on lock or close.
-- Plaintext exists on both devices while in use. A compromised endpoint
-  can expose messages and credentials. Traffic analysis, denial of service,
-  the local operating system and identity verification remain security
-  boundaries. There is no independent security audit.
-- There is no offline delivery, multi-device synchronization or group chat.
-  Both participants need a compatible desktop build.
-
-Protocol references are the [Noise specification](https://noiseprotocol.org/noise.html)
-and the [Tor onion-service overview](https://community.torproject.org/onion-services/overview/).
-
-### External dependencies
-
-| Dependency | Why MSG uses it | Possible alternative or trade-off |
-| --- | --- | --- |
-| Bundled Tor Expert Bundle and the Tor network | Tor publishes the onion service and routes connections without resolving onion addresses through local DNS. Relay availability and traffic correlation remain external risks. | [Arti](https://tpo.pages.torproject.net/onion-services/ecosystem/dev/implementations/) could provide the Tor implementation after testing service-key persistence, local proxy behavior and feature parity. Explicit direct IP mode avoids Tor and exposes network addresses to peers. |
-| Snow and its RustCrypto primitives | Snow implements the Noise handshakes that establish the encrypted MSG sessions and bind them to the expected keys. | Another maintained Noise implementation would need to pass interoperability and negative tests for the exact protocol contexts, framing and key handling. |
-| KryptoCore and OS randomness | KryptoCore protects local identity data and invitation codes. Key and invitation generation need the OS random source. | An independent implementation could reproduce the existing Argon2id and XChaCha20-Poly1305 profiles after compatibility testing. It would still need trustworthy randomness. |
-
-The desktop window uses `IOnionTransport` for startup, address rotation and
-shutdown. `TorRuntime` owns the bundled process, authenticated control channel
-and service profile. The Rust worker receives a loopback SOCKS endpoint and
-dials validated onion addresses through `OnionTransport`; peer authentication
-stays in the MSG protocols. A replacement must preserve the local-only handoff,
-support the onion service ports and fail closed if the onion route is unavailable.
-Direct IP remains an explicit mode.
+See the [threat model](THREAT_MODEL.md) for channel authentication, the
+unlocked session lifetime, dependencies and excluded threats.
 
 ## Build
 

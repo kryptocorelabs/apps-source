@@ -86,7 +86,7 @@ internal sealed class MsgWindow : Shell
 
     internal MsgWindow() : this(new TorRuntime()) { }
 
-    internal MsgWindow(IOnionTransport onionTransport) : base("MSG", "Deine Kontakte. Eure Gespräche.",
+    internal MsgWindow(IOnionTransport onionTransport) : base("MSG", "Experimentelle Vorschau",
         PrepareAppearance(), "KryptoCore-MSG;component/Assets/messenger.ico")
     {
         this.onionTransport = onionTransport;

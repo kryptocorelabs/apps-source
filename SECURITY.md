@@ -18,7 +18,6 @@ keep technical details for the private discussion. Include the affected version
 or commit, impact and steps using synthetic data. Never attach real credentials,
 vaults, identities, contact codes or emergency sheets.
 
-Maintainers aim to acknowledge reports, reproduce issues, coordinate disclosure
-and document affected versions, fixes and limits. There is no guaranteed response
-time or bug-bounty payment. Public contributions and private vulnerability
-handling are complementary parts of the same process.
+Messenger, Container, Rescue, Verify, their shared desktop worker and
+first-party build workflows are in scope. The [project response and disclosure policy](https://github.com/kryptocorelabs/kryptocore/blob/main/SECURITY.md#response-and-disclosure)
+defines response targets, private coordination and publication.

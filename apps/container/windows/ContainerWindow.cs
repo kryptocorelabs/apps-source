@@ -175,11 +175,12 @@ internal sealed class ContainerWindow : Shell
             IsEnabled = opener is not null,
             Margin = new Thickness(0, 4, 0, 6)
         };
-        right.Children.Add(selfOpening);
-        var exeHint = Text("Der Empfänger öffnet die EXE per Doppelklick. Teile die Passphrase separat.", 12, true);
+        var exportOptions = new StackPanel();
+        exportOptions.Children.Add(selfOpening);
+        var exeHint = Text("Für den Dateiaustausch empfehlen wir .kcc. Eine selbstöffnende EXE führt Programmcode aus und sollte nur in einem kontrollierten Ablauf verwendet werden.", 12, true);
         exeHint.TextWrapping = TextWrapping.Wrap;
-        exeHint.Visibility = Visibility.Collapsed;
-        right.Children.Add(exeHint);
+        exportOptions.Children.Add(exeHint);
+        var advancedExport = new Expander { Header = "Erweiterter Export", Content = exportOptions };
         string Extension() => selfOpening.IsChecked == true ? ".exe" : ".kcc";
         var target = Destination(right, "Speicherort");
         var credentials = new StackPanel();
@@ -266,6 +267,7 @@ internal sealed class ContainerWindow : Shell
             Refresh();
         });
         right.Children.Add(Row(chooseOutput));
+        right.Children.Add(advancedExport);
         right.Children.Add(Row(generate));
         right.Children.Add(own);
         right.Children.Add(Row(save));
@@ -294,7 +296,7 @@ internal sealed class ContainerWindow : Shell
         void ChangeFormat()
         {
             customOutput = false;
-            exeHint.Visibility = selfOpening.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            advancedExport.Header = selfOpening.IsChecked == true ? "Erweiterter Export · EXE ausgewählt" : "Erweiterter Export";
             UpdateOutput();
         }
         ((System.Collections.Specialized.INotifyCollectionChanged)list.Items).CollectionChanged += (_, _) => UpdateOutput();

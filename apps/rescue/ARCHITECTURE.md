@@ -24,22 +24,8 @@ A selected KCC scan bounds plaintext to 400 MiB before oversized entries
 are written. Vault scans run on the authenticated staged JSON.
 See SIGNATURES.md and MALWARE-PROTECTION.md for complete boundaries.
 
-Input leaves and output ancestors reject links/reparse points. This is not
-an immutable snapshot or protection against a hostile local operating system.
-Work from a stable copy and keep both source and destination under your control.
-In-process failure paths clean up owned staging files. Forced termination,
-power loss or cleanup failure may leave plaintext staging data in the chosen
-parent; inspect that location after a failed operation. Secure erasure is not
-guaranteed. Do not use an attacker-controlled/shared output parent.
-
-## Credential boundary
-
-Passwords are taken from a PasswordBox and sent through the private worker
-stdin pipe, separately from JSON and process arguments. Rust owns the input
-in Zeroizing storage and the format reader returns zeroizing plaintext.
-The UI clears its input immediately after use or a source change. It does not
-cache the credential or return plaintext records/private keys in diagnostics.
-Registers, system copies, swap, dumps and compromised endpoints remain limits.
+The [Rescue threat model](THREAT_MODEL.md) records the filesystem and
+credential boundaries for this design.
 
 At most one UI operation runs at a time. Export is not offered as a cancellable
 operation because force-killing a worker can prevent its staging cleanup.

@@ -474,7 +474,7 @@ fn chat_does_not_open_without_a_valid_encrypted_confirmation() {
 }
 
 #[test]
-fn chat_never_delivers_tampered_ciphertext_to_its_callback() {
+fn chat_rejects_tampered_reordered_and_truncated_frames_before_delivery() {
     let alice = Identity::generate().unwrap();
     let bob = Identity::generate().unwrap();
     let alice_key = alice.public();
@@ -482,34 +482,65 @@ fn chat_never_delivers_tampered_ciphertext_to_its_callback() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
-        let (socket, _) = listener.accept().unwrap();
-        let channel = chat::Channel::open(socket, &bob, &alice_key, false).unwrap();
-        let mut callbacks = 0;
-        assert!(channel
-            .read(|_| {
+        for truncated in [false, false, true] {
+            let (socket, _) = listener.accept().unwrap();
+            let channel = chat::Channel::open(socket, &bob, &alice_key, false).unwrap();
+            let mut callbacks = 0;
+            let result = channel.read(|_| {
                 callbacks += 1;
                 Ok(())
-            })
-            .is_err());
-        assert_eq!(callbacks, 0);
-        channel.close();
+            });
+            if truncated {
+                assert!(
+                    matches!(result, Err(Error::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+                );
+            } else {
+                assert!(matches!(result, Err(Error::Protocol)));
+            }
+            assert_eq!(callbacks, 0);
+            channel.close();
+        }
     });
-    let mut socket = TcpStream::connect(address).unwrap();
-    let mut connection = Connection::new(&mut socket);
-    let mut state = connection
-        .handshake_for(&alice, &bob_key, true, b"KryptoCore MSG chat v1")
-        .unwrap();
-    let mut sealed = [0; 64];
-    let length = state.write_message(&[0], &mut sealed).unwrap();
-    connection.write_frame(&sealed[..length]).unwrap();
-    connection.read_frame(&mut sealed[..17], 17).unwrap();
-    let mut plain = [0];
-    assert_eq!(state.read_message(&sealed[..17], &mut plain).unwrap(), 1);
-    assert_eq!(plain, [0]);
-    let length = state
-        .write_message(b"\x01synthetic text", &mut sealed)
-        .unwrap();
-    sealed[length - 1] ^= 1;
-    connection.write_frame(&sealed[..length]).unwrap();
+    for mutation in ["tamper", "reorder", "truncate"] {
+        let mut socket = TcpStream::connect(address).unwrap();
+        let mut connection = Connection::new(&mut socket);
+        let mut state = connection
+            .handshake_for(&alice, &bob_key, true, b"KryptoCore MSG chat v1")
+            .unwrap();
+        let mut sealed = [0; 64];
+        let length = state.write_message(&[0], &mut sealed).unwrap();
+        connection.write_frame(&sealed[..length]).unwrap();
+        connection.read_frame(&mut sealed[..17], 17).unwrap();
+        let mut plain = [0];
+        assert_eq!(state.read_message(&sealed[..17], &mut plain).unwrap(), 1);
+        assert_eq!(plain, [0]);
+        let length = state
+            .write_message(b"\x01first frame", &mut sealed)
+            .unwrap();
+        match mutation {
+            "tamper" => {
+                sealed[length - 1] ^= 1;
+                connection.write_frame(&sealed[..length]).unwrap();
+            }
+            "reorder" => {
+                let mut second = [0; 64];
+                let second_length = state
+                    .write_message(b"\x01second frame", &mut second)
+                    .unwrap();
+                let mut frames = (second_length as u16).to_be_bytes().to_vec();
+                frames.extend_from_slice(&second[..second_length]);
+                frames.extend_from_slice(&(length as u16).to_be_bytes());
+                frames.extend_from_slice(&sealed[..length]);
+                connection.write_all(&frames).unwrap();
+            }
+            "truncate" => {
+                connection
+                    .write_all(&(length as u16).to_be_bytes())
+                    .unwrap();
+                connection.write_all(&sealed[..length - 1]).unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
     server.join().unwrap();
 }
