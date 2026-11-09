@@ -32,6 +32,9 @@ internal sealed class MsgWindow : Shell
     private bool direct;
     private readonly IOnionTransport onionTransport;
     private SecureString? identitySecret;
+    private CancellationTokenSource? unlockedSession;
+    private OnionIdentity? onionIdentity;
+    private bool closed;
     private CancellationTokenSource? chatSession;
     private CancellationTokenSource? contactRequestSession;
     private bool contactRequestsReady;
@@ -40,7 +43,8 @@ internal sealed class MsgWindow : Shell
     private readonly TextBlock transportState = Text("TOR", 12);
     private readonly TextBlock linkState = Text("Keine aktive Verbindung", 14);
     private readonly TextBlock linkDetail = Text("Füge einen Kontakt hinzu oder teile deine Adresse für eine Anfrage.", 12, true);
-    private readonly TextBox onionAddress = new() { IsReadOnly = true };
+    private readonly TextBox onionAddress = new() { IsReadOnly = true, IsUndoEnabled = false };
+    private readonly TextBlock onionState = Text("Entsperre MSG, um deine Tor-Adresse zu aktivieren.", 12, true);
     private readonly TextBox publicAddress = new() { MaxLength = 64 };
     private readonly TextBox localAddress = new() { Text = LocalAddress, MaxLength = 64 };
     private readonly TextBox manualAddress = new() { MaxLength = 64 };
@@ -55,6 +59,7 @@ internal sealed class MsgWindow : Shell
     private Action showProfile = null!;
     private Action showSettings = null!;
     private Action refresh = () => { };
+    private Action refreshTorSettings = () => { };
     private Action refreshContactRequests = () => { };
     private Action clearContact = () => { };
     private Action clearInvitation = () => { };
@@ -100,12 +105,10 @@ internal sealed class MsgWindow : Shell
         showSettings = Tab("Einstellungen", SettingsView());
         Closed += (_, _) =>
         {
+            closed = true;
+            EndIdentitySession();
             ClearTicket(ref incomingTicket);
             clearInvitation();
-            chatSession?.Cancel();
-            contactRequestSession?.Cancel();
-            identitySecret?.Dispose();
-            onionTransport.Stop();
             ClearSessionConversations();
         };
         refresh();
@@ -321,7 +324,7 @@ internal sealed class MsgWindow : Shell
 
         async Task UpdateContacts(object? update = null, string? removedKey = null, SavedContact? saved = null)
         {
-            await Run("Kontaktliste wird geöffnet …", token =>
+            await RunForIdentity("Kontaktliste wird geöffnet …", token =>
                 Engine.Call(new { action = "contacts", path = identityPath, update }, IdentityPassword(), cancellation: token),
                 reply =>
                 {
@@ -400,7 +403,7 @@ internal sealed class MsgWindow : Shell
         {
             if (incomingTicket is not { } ticket || identityPath is not { } path
                 || ActivePeer is not { } peer || SendAddress is not { } address) return;
-            await Run("Einladung wird angenommen …", async token =>
+            await RunForIdentity("Einladung wird angenommen …", async token =>
             {
                 var endpoint = await EnsureTorAsync(token, showLink: true);
                 return await Engine.Call(new { action = "join_invitation", path, peer, address,
@@ -566,6 +569,7 @@ internal sealed class MsgWindow : Shell
                 return;
             RestoreConversation();
             using var session = new CancellationTokenSource();
+            long currentSession = identitySession;
             chatSession = session;
             channelPeer = peer;
             connectionFailed = false;
@@ -573,7 +577,7 @@ internal sealed class MsgWindow : Shell
             {
                 void Reset()
                 {
-                    if (!ReferenceEquals(chatSession, session)) return;
+                    if (!ReferenceEquals(chatSession, session) || currentSession != identitySession) return;
                     connected = false;
                     encryptionIndicator.Update(ChannelSecurity.Disconnected);
                     SetLink("Verbindung wird beendet …", "Der Kanal ist nicht mehr zum Senden freigegeben.");
@@ -679,6 +683,7 @@ internal sealed class MsgWindow : Shell
                     refresh();
                 }, input =>
                 {
+                    if (session.IsCancellationRequested) return;
                     channelInput = input;
                     refresh();
                 });
@@ -698,7 +703,7 @@ internal sealed class MsgWindow : Shell
                 downloadId = null;
                 downloadPrompt?.Close();
                 downloadPrompt = null;
-                if (pending is not null)
+                if (pending is not null && currentSession == identitySession)
                     SetStatus("Die letzte Übertragung wurde nicht bestätigt. Kläre das vor einem erneuten Versuch.", true);
                 channelInput = null;
                 channelPeer = null;
@@ -706,7 +711,7 @@ internal sealed class MsgWindow : Shell
                 connectionFailed = failed;
                 pending = null;
                 chatSession = null;
-                if (string.Equals(ActivePeer, peer, StringComparison.OrdinalIgnoreCase))
+                if (currentSession == identitySession && string.Equals(ActivePeer, peer, StringComparison.OrdinalIgnoreCase))
                     SetLink(failed ? "Chatkanal nicht verfügbar" : "Chatkanal geschlossen", detail, failed ? "Problem" : "Ink");
                 refresh();
             }
@@ -1040,7 +1045,7 @@ internal sealed class MsgWindow : Shell
         {
             if (identityPath is not { } path) return;
             bool required = twoCodes.IsChecked == true;
-            await Run("Einladungseinstellung wird gespeichert …", token =>
+            await RunForIdentity("Einladungseinstellung wird gespeichert …", token =>
                 Engine.Call(new { action = "set_contact_policy", path, required }, IdentityPassword(), cancellation: token),
                 _ =>
                 {
@@ -1121,12 +1126,7 @@ internal sealed class MsgWindow : Shell
         }, true)));
         var lockRow = Row(Button("MSG sperren", () =>
         {
-            identitySession++;
-            chatSession?.Cancel();
-            contactRequestSession?.Cancel();
-            identitySecret?.Dispose();
-            identitySecret = null;
-            onionTransport.Stop();
+            EndIdentitySession();
             identityPath = publicKey = peerKey = peerAddress = null;
             contactOpened = false;
             requireTwoCodes = false;
@@ -1162,7 +1162,7 @@ internal sealed class MsgWindow : Shell
         });
         shareForm.Children.Add(Row(Button("Einladung erstellen", async () =>
         {
-            await Run("Kontaktcode wird erstellt …", async token =>
+            await RunForIdentity("Kontaktcode wird erstellt …", async token =>
             {
                 if (pendingInvitations.Items.Count >= MaxPendingInvitations)
                     throw new ArgumentException("Es sind bereits acht Einladungen offen. Ziehe zuerst eine zurück.");
@@ -1201,10 +1201,11 @@ internal sealed class MsgWindow : Shell
         waitPanel.Children.Add(Row(Button("Auf Annahme warten", async () =>
         {
             if (identityPath is not { } path || pendingInvitations.Items.Count == 0) return;
+            long currentSession = identitySession;
             var batch = pendingInvitations.Items.Cast<OutgoingInvitation>().ToArray();
             bool started = false;
             bool finished = false;
-            await Run("Einladung wird bereitgestellt …", async token =>
+            await RunForIdentity("Einladung wird bereitgestellt …", async token =>
             {
                 if (chatSession is not null)
                     throw new ArgumentException("Schließe zuerst den Chatkanal und warte dann auf die Annahme.");
@@ -1240,7 +1241,7 @@ internal sealed class MsgWindow : Shell
                 showChat();
                 refresh();
             }, canCancel: true);
-            if (started && !finished)
+            if (started && !finished && currentSession == identitySession)
             {
                 clearInvitation();
                 SetStatus("Warten unterbrochen. Die offenen Einladungen wurden zurückgezogen.");
@@ -1292,10 +1293,10 @@ internal sealed class MsgWindow : Shell
 
         void UseIdentity(string path, Reply reply, SecureString unlocked)
         {
-            identitySession++;
+            if (closed) return;
+            EndIdentitySession();
             if (identityPath != path || publicKey != reply.Text)
             {
-                contactRequestSession?.Cancel();
                 peerKey = null;
                 peerAddress = null;
                 manualKey.Clear();
@@ -1306,9 +1307,9 @@ internal sealed class MsgWindow : Shell
                 ClearSessionConversations();
             }
             identityPath = path;
-            identitySecret?.Dispose();
             identitySecret = unlocked.Copy();
             identitySecret.MakeReadOnly();
+            unlockedSession = new CancellationTokenSource();
             publicKey = reply.Text;
             requireTwoCodes = reply.TwoCodes == true;
             twoCodes.IsChecked = requireTwoCodes;
@@ -1318,6 +1319,7 @@ internal sealed class MsgWindow : Shell
             createOption.IsExpanded = openOption.IsExpanded = false;
             refresh();
             showChat();
+            StartTorForIdentity();
         }
 
     }
@@ -1365,25 +1367,29 @@ internal sealed class MsgWindow : Shell
 
         async Task Decide(bool accepted, bool blocked = false)
         {
-            if (pending is not { } id || submit is not { } input || deciding) return;
+            if (pending is not { } id || submit is not { } input || deciding
+                || contactRequestSession is not { IsCancellationRequested: false } session) return;
             deciding = true;
             Update();
             try
             {
                 if (blocked && string.Equals(pendingKey, ActivePeer, StringComparison.OrdinalIgnoreCase))
                     await stopConversation();
+                session.Token.ThrowIfCancellationRequested();
                 await input(new { id, accept = accepted, block = blocked });
+                session.Token.ThrowIfCancellationRequested();
                 SetStatus(blocked ? "Kontakt wird blockiert …" : accepted ? "Anfrage angenommen. Chat wird geöffnet …" : "Anfrage abgelehnt.");
             }
             catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
             {
-                contactRequestSession?.Cancel();
+                if (ReferenceEquals(contactRequestSession, session)) session.Cancel();
             }
         }
 
         async Task ShowRequest(long id, string address, long generation)
         {
-            if (pending != id || generation != requestGeneration || deciding || prompt is not null) return;
+            if (pending != id || generation != requestGeneration || deciding || prompt is not null
+                || contactRequestSession is not { IsCancellationRequested: false } session) return;
             var shown = new MsgPrompt(this, "Neue Kontaktanfrage",
                 $"Jemand möchte mit dir chatten.\n\n{address}\n\nMit Annehmen wird der Chat geöffnet."
                 + (chatSession is not null ? " Dabei wechselst du von deinem aktuellen Chat zu diesem Kontakt." : ""),
@@ -1392,13 +1398,14 @@ internal sealed class MsgWindow : Shell
             shown.Display();
             var choice = await shown.Result;
             if (ReferenceEquals(prompt, shown)) prompt = null;
-            if (pending != id || generation != requestGeneration || deciding) return;
+            if (pending != id || generation != requestGeneration || deciding || session.IsCancellationRequested) return;
             await Decide(choice == PromptChoice.First, choice == PromptChoice.Third);
         }
 
         async Task Listen(string path)
         {
             using var session = new CancellationTokenSource();
+            long currentSession = identitySession;
             contactRequestSession = session;
             contactRequestsReady = false;
             listeningState.Text = "Erreichbarkeit wird vorbereitet …";
@@ -1411,6 +1418,7 @@ internal sealed class MsgWindow : Shell
                     var reply = await Engine.Chat(new { action = "listen_contact_requests", path }, IdentityPassword(),
                         session.Token, frame =>
                         {
+                            if (session.IsCancellationRequested) return;
                             switch (frame.GetProperty("event").GetString())
                             {
                                 case "request_listening":
@@ -1443,7 +1451,13 @@ internal sealed class MsgWindow : Shell
                             }
                             Update();
                             RefreshConversationList();
-                        }, input => { submit = input; Update(); });
+                        }, input =>
+                        {
+                            if (session.IsCancellationRequested) return;
+                            submit = input;
+                            Update();
+                        });
+                    session.Token.ThrowIfCancellationRequested();
                     submit = null;
                     if (reply.Ok && reply.Text is not null) await SelectContact(reply);
                     else
@@ -1457,7 +1471,8 @@ internal sealed class MsgWindow : Shell
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
                 or InvalidOperationException or System.ComponentModel.Win32Exception or JsonException)
             {
-                SetStatus("Kontaktanfragen wurden unterbrochen. Aktiviere die Erreichbarkeit erneut.", true);
+                if (currentSession == identitySession)
+                    SetStatus("Kontaktanfragen wurden unterbrochen. Aktiviere die Erreichbarkeit erneut.", true);
             }
             finally
             {
@@ -1506,13 +1521,14 @@ internal sealed class MsgWindow : Shell
         async Task EnableRequests(bool copyAddress)
         {
             if (identityPath is not { } path || direct || requireTwoCodes) return;
+            long currentSession = identitySession;
             string? address = null;
-            bool ready = await Run("Tor wird vorbereitet …", async token =>
+            bool ready = await RunForIdentity("Tor wird vorbereitet …", async token =>
             {
                 address = (await EnsureTorAsync(token)).OnionAddress;
                 return new Reply(true, "Erreichbarkeit wird aktiviert.", null, null, null);
             }, canCancel: true);
-            if (!ready || identityPath != path) return;
+            if (!ready || identityPath != path || currentSession != identitySession) return;
             if (contactRequestSession is null) _ = Listen(path);
             if (copyAddress && address is not null)
                 CopyText(address.Split(':')[0], "Adresse kopiert. Du bist für Anfragen erreichbar.");
@@ -1526,7 +1542,7 @@ internal sealed class MsgWindow : Shell
             string address = input.Trim().ToLowerInvariant();
             if (address.EndsWith(".onion", StringComparison.Ordinal)) address += $":{OnionEndpoint.ChatPort}";
             Reply? acceptedReply = null;
-            await Run("Verbindung wird angefragt …", async token =>
+            await RunForIdentity("Verbindung wird angefragt …", async token =>
             {
                 if (!IsOnionEndpoint(address)) throw new ArgumentException("Gib eine gültige .onion-Adresse ein.");
                 var endpoint = await EnsureTorAsync(token);
@@ -1595,7 +1611,7 @@ internal sealed class MsgWindow : Shell
         async Task Load(string? removeKey = null)
         {
             if (identityPath is not { } path) return;
-            await Run("Blockierte Kontakte werden geladen …", token =>
+            await RunForIdentity("Blockierte Kontakte werden geladen …", token =>
                 Engine.Call(new { action = "blocked_contacts", path, remove = removeKey },
                     IdentityPassword(), cancellation: token), reply =>
                 {
@@ -1613,7 +1629,7 @@ internal sealed class MsgWindow : Shell
         preferences.Children.Add(BlockedContactsView());
         preferences.Children.Add(Row(Button("Kontaktanfragen verwalten", () => showRequestOptions())));
         preferences.Children.Add(Text("Anfragen per Tor-Adresse erlaubst du für die aktuelle Sitzung. Sperren beendet die Freigabe. Online-Status teilt ihr im Chat nur mit beidseitiger Zustimmung.", 12, true));
-        var tor = Section("Tor · Automatisch", "MSG startet das integrierte Tor bei Bedarf. Deine Onion-Adresse bleibt bei einem Neustart erhalten.");
+        var tor = Section("Tor · Automatisch", "Jede Identität hat eine eigene Tor-Adresse. MSG aktiviert sie beim Entsperren und beendet Tor beim Sperren.");
         tor.Children.Add(Row(Button("Tor starten und prüfen", async () =>
             await Run("Tor wird gestartet …", async token =>
             {
@@ -1621,22 +1637,17 @@ internal sealed class MsgWindow : Shell
                 return new Reply(true, "Tor ist mit dem Netzwerk verbunden.", null, null, null);
             }, canCancel: true), true)));
         Field(tor, "Meine Onion-Adresse", onionAddress);
-        tor.Children.Add(Row(Button("Neue Tor-Adresse erstellen …", async () =>
+        tor.Children.Add(onionState);
+        var rotate = Button("Neue Tor-Adresse erstellen …", async () => await ChangeAddress(import: false));
+        var import = Button("Frühere Tor-Adresse übernehmen …", async () => await ChangeAddress(import: true));
+        tor.Children.Add(Row(rotate, import));
+        refreshTorSettings = () =>
         {
-            if (MessageBox.Show(this,
-                    "Kontakte brauchen danach einen neuen Kontaktcode, um dich zu erreichen. Möchtest du deine Tor-Adresse wechseln?",
-                    "Tor-Adresse wechseln", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
-                return;
-            await Run("Neue Tor-Adresse wird erstellt …", async token =>
-            {
-                chatSession?.Cancel();
-                contactRequestSession?.Cancel();
-                var endpoint = await onionTransport.RotateAsync(token);
-                onionAddress.Text = endpoint.OnionAddress;
-                ResetLink();
-                return new Reply(true, "Neue Tor-Adresse aktiv. Erstelle unter „Mein Profil“ einen neuen Kontaktcode.", null, null, null);
-            }, canCancel: true);
-        })));
+            rotate.IsEnabled = onionIdentity is not null;
+            import.Visibility = onionTransport.HasLegacyKey ? Visibility.Visible : Visibility.Collapsed;
+            import.IsEnabled = onionIdentity is not null;
+        };
+        refreshTorSettings();
         var notices = new Expander { Header = "Lizenzhinweise zu Tor", Margin = new Thickness(0, 10, 0, 0) };
         notices.Expanded += (_, _) => notices.Content ??= TorNotices();
         tor.Children.Add(notices);
@@ -1669,13 +1680,57 @@ internal sealed class MsgWindow : Shell
         ((FrameworkElement)Content).SizeChanged += (_, size) => page.MaxWidth = Math.Max(0, size.NewSize.Width);
         return page;
 
+        async Task ChangeAddress(bool import)
+        {
+            if (onionIdentity is not { } owner) return;
+            string title = import ? "Frühere Tor-Adresse übernehmen" : "Tor-Adresse wechseln";
+            string detail = import
+                ? "Die frühere Adresse wird dieser Identität zugeordnet und ersetzt ihre aktuelle Adresse. Teile die übernommene Adresse nur mit Kontakten, die diese Identität erreichen sollen."
+                : "Nur diese Identität erhält eine neue Adresse. Teile anschließend einen neuen Kontaktcode mit deinen Kontakten.";
+            if (MessageBox.Show(this, detail, title, MessageBoxButton.YesNo, MessageBoxImage.Question,
+                    MessageBoxResult.No) != MessageBoxResult.Yes || !IsCurrentOnionIdentity(owner)) return;
+
+            await RunForIdentity(import ? "Frühere Tor-Adresse wird übernommen …" : "Neue Tor-Adresse wird erstellt …", async token =>
+            {
+                chatSession?.Cancel();
+                contactRequestSession?.Cancel();
+                var changedOwner = owner with { };
+                onionIdentity = changedOwner;
+                onionTransport.Stop();
+                onionAddress.Clear();
+                onionState.Text = "Tor-Adresse wird aktualisiert …";
+                ResetLink();
+                try
+                {
+                    var endpoint = import ? await onionTransport.ImportLegacyAsync(changedOwner, token)
+                        : await onionTransport.RotateAsync(changedOwner, token);
+                    ConfirmTorAddress(changedOwner, endpoint, token);
+                    return new Reply(true, import ? "Frühere Tor-Adresse übernommen."
+                        : "Neue Tor-Adresse aktiv. Erstelle unter „Mein Profil“ einen neuen Kontaktcode.", null, null, null);
+                }
+                catch (CryptographicException)
+                {
+                    throw new IOException("Die Tor-Adresse konnte nicht sicher gespeichert oder gelesen werden.");
+                }
+                finally
+                {
+                    if (IsCurrentOnionIdentity(changedOwner))
+                    {
+                        if (onionAddress.Text.Length == 0) onionState.Text = "Tor ist derzeit nicht verbunden. Du kannst es erneut prüfen.";
+                        refreshTorSettings();
+                    }
+                }
+            }, canCancel: true);
+        }
+
         void SetMode(bool enabled)
         {
             chatSession?.Cancel();
             contactRequestSession?.Cancel();
             direct = enabled;
             clearInvitation();
-            if (direct) onionTransport.Stop();
+            if (direct) StopTor();
+            else StartTorForIdentity();
             ResetLink();
             inputs.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
             verified.IsChecked = false;
@@ -1714,6 +1769,67 @@ internal sealed class MsgWindow : Shell
     private byte[] IdentityPassword() => Engine.PasswordBytes(identitySecret
         ?? throw new ArgumentException("Entsperre MSG zuerst unter „Mein Profil“."));
 
+    private Task<bool> RunForIdentity(string waiting, Func<CancellationToken, Task<Reply>> operation,
+        Action<Reply>? success = null, bool canCancel = false) => Run(waiting, async token =>
+    {
+        if (unlockedSession is not { } session)
+            throw new ArgumentException("Entsperre MSG zuerst unter „Mein Profil“.");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(session.Token, token);
+        cancellation.Token.ThrowIfCancellationRequested();
+        var reply = await operation(cancellation.Token);
+        cancellation.Token.ThrowIfCancellationRequested();
+        return reply;
+    }, success, canCancel);
+
+    private void EndIdentitySession()
+    {
+        identitySession++;
+        chatSession?.Cancel();
+        contactRequestSession?.Cancel();
+        unlockedSession?.Cancel();
+        unlockedSession?.Dispose();
+        unlockedSession = null;
+        StopTor();
+        identitySecret?.Dispose();
+        identitySecret = null;
+    }
+
+    private void StopTor()
+    {
+        onionIdentity = null;
+        onionTransport.Stop();
+        onionAddress.Clear();
+        onionState.Text = direct ? "Direkte IP-Verbindung ausgewählt."
+            : "Entsperre MSG, um deine Tor-Adresse zu aktivieren.";
+        refreshTorSettings();
+    }
+
+    private void StartTorForIdentity()
+    {
+        if (direct || identityPath is not { } path || publicKey is not { } key
+            || identitySecret is not { } secret || unlockedSession is not { } session) return;
+        var token = session.Token;
+        var owner = new OnionIdentity(path, key, () =>
+        {
+            token.ThrowIfCancellationRequested();
+            return Engine.PasswordBytes(secret);
+        });
+        onionIdentity = owner;
+        refreshTorSettings();
+        _ = ConnectInBackground();
+
+        async Task ConnectInBackground()
+        {
+            try { await EnsureTorAsync(token, showProgress: false); }
+            catch (OperationCanceledException) { }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
+                or System.ComponentModel.Win32Exception or JsonException or InvalidOperationException)
+            {
+                if (IsCurrentOnionIdentity(owner)) onionState.Text = error.Message;
+            }
+        }
+    }
+
     private static new WrapPanel Row(params UIElement[] children)
     {
         var row = new WrapPanel { Margin = new Thickness(0, 4, 0, 2) };
@@ -1725,16 +1841,48 @@ internal sealed class MsgWindow : Shell
         return row;
     }
 
-    private async Task<OnionEndpoint> EnsureTorAsync(CancellationToken token, bool showLink = false)
+    private bool IsCurrentOnionIdentity(OnionIdentity owner) => !closed && ReferenceEquals(onionIdentity, owner);
+
+    private void ConfirmTorAddress(OnionIdentity owner, OnionEndpoint endpoint, CancellationToken token)
     {
-        var endpoint = await onionTransport.StartAsync(percent =>
-        {
-            string status = $"Tor verbindet sich … {percent} %";
-            SetStatus(status);
-            if (showLink) SetLink("Tor startet", status);
-        }, token);
+        token.ThrowIfCancellationRequested();
+        if (!IsCurrentOnionIdentity(owner)) throw new OperationCanceledException();
         onionAddress.Text = endpoint.OnionAddress;
-        return endpoint;
+        onionState.Text = "Tor ist verbunden.";
+    }
+
+    private async Task<OnionEndpoint> EnsureTorAsync(CancellationToken token, bool showLink = false, bool showProgress = true)
+    {
+        if (direct) throw new ArgumentException("Schalte in den Einstellungen zuerst wieder auf Tor um.");
+        if (onionIdentity is not { } owner || unlockedSession is not { } session)
+            throw new ArgumentException("Entsperre MSG zuerst unter „Mein Profil“.");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, session.Token);
+        if (onionAddress.Text.Length == 0) onionState.Text = "Tor verbindet sich …";
+        try
+        {
+            var endpoint = await onionTransport.StartAsync(owner, percent =>
+            {
+                if (!IsCurrentOnionIdentity(owner) || cancellation.IsCancellationRequested) return;
+                string status = $"Tor verbindet sich … {percent} %";
+                onionState.Text = status;
+                if (showProgress) SetStatus(status);
+                if (showLink) SetLink("Tor startet", status);
+            }, cancellation.Token);
+            ConfirmTorAddress(owner, endpoint, cancellation.Token);
+            return endpoint;
+        }
+        catch (CryptographicException)
+        {
+            throw new IOException("Die Tor-Adresse konnte nicht sicher gespeichert oder gelesen werden.");
+        }
+        finally
+        {
+            if (IsCurrentOnionIdentity(owner))
+            {
+                if (onionAddress.Text.Length == 0) onionState.Text = "Tor ist derzeit nicht verbunden. Du kannst es erneut prüfen.";
+                refreshTorSettings();
+            }
+        }
     }
 
     private static TextBox TorNotices()

@@ -8,6 +8,8 @@ pub use contact_book::ContactBook;
 mod dh;
 mod file;
 pub use file::{save_received_file, save_received_file_as, send_file, MAX_FILE_SIZE};
+mod onion_store;
+pub use onion_store::{OnionKeyStore, ONION_KEY_SIZE};
 pub mod pairing;
 pub mod presence;
 #[cfg(test)]

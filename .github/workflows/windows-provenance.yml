@@ -54,7 +54,7 @@ jobs:
           $artifacts = Join-Path $env:RUNNER_TEMP "windows-$env:BUILD_COPY/artifacts"
           python apps/rescue/package-windows-preview.py --executable (Join-Path $artifacts 'KryptoCore-Rescue.exe') --output-dir $artifacts --dotnet-runtime '10.0.14'
           if ($LASTEXITCODE -ne 0) { throw 'Rescue release packaging failed.' }
-      - name: Test bundled Tor and DPAPI onion key migration offline
+      - name: Test identity-bound Tor keys and DPAPI migration offline
         shell: pwsh
         env:
           BUILD_COPY: ${{ matrix.copy }}

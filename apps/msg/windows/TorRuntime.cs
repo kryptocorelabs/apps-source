@@ -9,202 +9,204 @@ using System.Text.RegularExpressions;
 
 namespace KryptoCore.Desktop;
 
-internal sealed class TorRuntime(string? dataRoot = null) : IOnionTransport, IDisposable
+internal sealed class TorRuntime(string? dataRoot = null, bool networkEnabled = true) : IOnionTransport, IDisposable
 {
     private const int PresencePort = 49425;
     private const int ContactRequestPort = 49426;
     private static readonly Regex Bootstrap = new(@"(?:^| )PROGRESS=(\d{1,3})(?: |$)", RegexOptions.CultureInvariant);
     private readonly string profile = dataRoot ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KryptoCore", "MSG");
-    private DirectoryInfo? scratch;
-    private Process? process;
-    private ControlConnection? control;
-    private FileStream? profileLock;
+    private readonly SemaphoreSlim operations = new(1, 1);
+    private readonly object state = new();
+    private CancellationTokenSource lifetime = new();
+    private TorSession? running;
+    private OnionIdentity? owner;
     private OnionEndpoint? ready;
-    private string? pendingService;
 
-    Task<OnionEndpoint> IOnionTransport.StartAsync(Action<int>? onProgress, CancellationToken cancellation)
-        => StartAsync(onProgress, cancellation);
+    public bool HasLegacyKey => OnionKeyStore.HasLegacyKey(profile);
 
-    Task<OnionEndpoint> IOnionTransport.RotateAsync(CancellationToken cancellation)
-        => RotateAsync(cancellation);
+    Task<OnionEndpoint> IOnionTransport.StartAsync(OnionIdentity identity, Action<int>? onProgress,
+        CancellationToken cancellation) => StartAsync(identity, onProgress, cancellation, networkEnabled);
 
-    void IOnionTransport.Stop() => Dispose();
+    Task<OnionEndpoint> IOnionTransport.RotateAsync(OnionIdentity identity, CancellationToken cancellation)
+        => RotateAsync(identity, cancellation, networkEnabled);
 
-    internal async Task<OnionEndpoint> StartAsync(Action<int>? onProgress, CancellationToken cancellation,
+    Task<OnionEndpoint> IOnionTransport.ImportLegacyAsync(OnionIdentity identity, CancellationToken cancellation)
+        => ImportLegacyAsync(identity, cancellation, networkEnabled);
+
+    public void Stop() => Dispose();
+
+    internal Task<OnionEndpoint> StartAsync(OnionIdentity identity, Action<int>? onProgress,
+        CancellationToken cancellation, bool connectToNetwork = true)
+        => ActivateAsync(identity, Change.Keep, onProgress, cancellation, connectToNetwork);
+
+    internal Task<OnionEndpoint> RotateAsync(OnionIdentity identity, CancellationToken cancellation,
         bool connectToNetwork = true)
+        => ActivateAsync(identity, Change.Rotate, null, cancellation, connectToNetwork);
+
+    internal Task<OnionEndpoint> ImportLegacyAsync(OnionIdentity identity, CancellationToken cancellation,
+        bool connectToNetwork = true)
+        => ActivateAsync(identity, Change.Import, null, cancellation, connectToNetwork);
+
+    private enum Change { Keep, Rotate, Import }
+
+    private async Task<OnionEndpoint> ActivateAsync(OnionIdentity identity, Change change,
+        Action<int>? onProgress, CancellationToken cancellation, bool connectToNetwork)
     {
-        if (ready is { } existing && process is { HasExited: false }) return existing;
-        Dispose();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        timeout.CancelAfter(connectToNetwork ? TimeSpan.FromMinutes(2) : TimeSpan.FromSeconds(15));
-        var token = timeout.Token;
-        int percentage = 0;
-        try
+        CancellationTokenSource request;
+        lock (state)
+            request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token, cancellation);
+        using (request)
         {
-            Directory.CreateDirectory(profile);
-            profileLock = new FileStream(Path.Combine(profile, "onion-store.lock"), FileMode.OpenOrCreate,
-                FileAccess.ReadWrite, FileShare.None);
-            string service = pendingService ?? ReadActiveService();
-            var keys = new OnionKeyStore(Path.Combine(profile, service));
-            scratch = Directory.CreateTempSubdirectory("kryptocore-tor-");
-            string binary = Path.Combine(scratch.FullName, "tor.exe");
-            string config = Path.Combine(scratch.FullName, "torrc");
-            string portFile = Path.Combine(scratch.FullName, "control-port");
-            string cookieFile = Path.Combine(scratch.FullName, "control-cookie");
-            string data = Directory.CreateDirectory(Path.Combine(profile, "tor-data")).FullName;
-            await ExtractAsync(binary, token);
-            await File.WriteAllTextAsync(config, "# Dedicated KryptoCore MSG instance\n", token);
-
-            var start = new ProcessStartInfo(binary)
+            await operations.WaitAsync(request.Token);
+            try
             {
-                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = scratch.FullName,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            };
-            foreach (string argument in new[]
-            {
-                "-f", config, "--DataDirectory", data,
-                "--SocksPort", "auto ExtendedErrors", "--ControlPort", "auto", "--ControlPortWriteToFile", portFile,
-                "--CookieAuthentication", "1", "--CookieAuthFile", cookieFile,
-                "--__OwningControllerProcess", Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
-                "--Log", "warn stdout"
-            }) start.ArgumentList.Add(argument);
-            if (!connectToNetwork)
-            {
-                start.ArgumentList.Add("--DisableNetwork");
-                start.ArgumentList.Add("1");
-            }
-            // Hold the verified file open without write or delete sharing until Windows starts it.
-            using (var expected = typeof(TorRuntime).Assembly.GetManifestResourceStream("kryptocore-tor.sha256")
-                ?? throw new IOException("Die Prüfsumme für das eingebettete Tor fehlt."))
-            using (var digest = new StreamReader(expected, Encoding.ASCII))
-            using (var executable = new FileStream(binary, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true))
-            {
-                await VerifyExecutableAsync(executable, (await digest.ReadToEndAsync(token)).Trim(), token);
-                token.ThrowIfCancellationRequested();
-                process = Process.Start(start) ?? throw new IOException("Tor konnte nicht gestartet werden.");
-            }
-            _ = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-            _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
-
-            while (!File.Exists(portFile) || !File.Exists(cookieFile))
-                await WaitForTorAsync(token);
-            string published = (await File.ReadAllTextAsync(portFile, token)).Trim();
-            if (!published.StartsWith("PORT=", StringComparison.Ordinal)
-                || !TryLocalPort(published[5..], out int controlPort))
-                throw new IOException("Tor hat keinen lokalen Steuerport gemeldet.");
-            control = await ControlConnection.OpenAsync(controlPort, cookieFile, token);
-            string onion = await RegisterOnionAsync(control, keys,
-                requireExisting: pendingService is null && service != "onion", token);
-            foreach (string directory in Directory.EnumerateDirectories(profile, "onion*"))
-            {
-                string name = Path.GetFileName(directory);
-                if (!IsServiceName(name) || string.Equals(name, service, StringComparison.OrdinalIgnoreCase)) continue;
-                token.ThrowIfCancellationRequested();
-                new OnionKeyStore(directory).MigrateRetiredKey();
-            }
-            while (true)
-            {
-                var values = await control.CommandAsync("GETINFO net/listeners/socks status/bootstrap-phase", token);
-                var match = Bootstrap.Match(values.GetValueOrDefault("status/bootstrap-phase") ?? "");
-                if (match.Success)
-                    percentage = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-                onProgress?.Invoke(percentage);
-                int port = FindSocksPort(values.GetValueOrDefault("net/listeners/socks"));
-                if (!connectToNetwork || (percentage == 100 && port != 0))
+                lock (state)
                 {
-                    ready = new OnionEndpoint(port, $"{onion}:{OnionEndpoint.ChatPort}");
-                    return ready;
+                    request.Token.ThrowIfCancellationRequested();
+                    if (change == Change.Keep && ReferenceEquals(owner, identity) && ready is { } endpoint
+                        && running is { IsRunning: true })
+                        return endpoint;
+                    Disconnect();
                 }
-                await WaitForTorAsync(token);
+
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(request.Token);
+                timeout.CancelAfter(connectToNetwork ? TimeSpan.FromMinutes(2) : TimeSpan.FromSeconds(30));
+                int progress = 0;
+                try
+                {
+                    return await StartSessionAsync(identity, change, percent =>
+                    {
+                        progress = percent;
+                        onProgress?.Invoke(percent);
+                    }, timeout.Token, connectToNetwork);
+                }
+                catch (Exception error) when (request.IsCancellationRequested
+                    && error is OperationCanceledException or IOException or System.ComponentModel.Win32Exception)
+                {
+                    throw new OperationCanceledException(request.Token);
+                }
+                catch (Exception error) when (timeout.IsCancellationRequested
+                    && error is OperationCanceledException or IOException or System.ComponentModel.Win32Exception)
+                {
+                    throw new IOException($"Tor wurde nicht rechtzeitig bereit (zuletzt {progress} %).");
+                }
+            }
+            finally { operations.Release(); }
+        }
+    }
+
+    private async Task<OnionEndpoint> StartSessionAsync(OnionIdentity identity, Change change,
+        Action<int> onProgress, CancellationToken token, bool connectToNetwork)
+    {
+        TorSession? session = new(profile);
+        byte[]? previous = null;
+        byte[]? candidate = null;
+        try
+        {
+            using var abort = token.Register(session.Abort);
+            previous = await ReadIdentityKeyAsync(identity, token);
+            await session.OpenAsync(token);
+            // Once Tor holds its data-directory lock, an older MSG instance cannot be using these files.
+            OnionKeyStore.ProtectLegacyProfile(profile, token);
+            OnionKeyStore? legacy = change == Change.Import ? OnionKeyStore.Active(profile) : null;
+            if (legacy is not null)
+            {
+                legacy.CheckImportOwner(identity.PublicKey);
+                candidate = legacy.ReadKey() ?? throw new IOException("Es gibt keine frühere Tor-Adresse zum Übernehmen.");
+            }
+            string? previousAddress = legacy?.ReadLegacyAddress();
+            var (address, generated) = await RegisterOnionAsync(session.Control,
+                change == Change.Keep ? previous : candidate, previousAddress, token);
+            candidate ??= generated;
+            if (change == Change.Keep)
+            {
+                Clear(previous);
+                previous = null;
+            }
+            int port = await session.WaitForNetworkAsync(onProgress, token, connectToNetwork);
+
+            if (candidate is not null)
+            {
+                if (legacy is not null) legacy.ClaimImport(identity.PublicKey);
+                if (previous is null || !CryptographicOperations.FixedTimeEquals(previous, candidate))
+                    await WriteIdentityKeyAsync(identity, candidate, previous, token);
+                if (legacy is not null)
+                {
+                    byte[]? confirmed = await ReadIdentityKeyAsync(identity, token);
+                    try
+                    {
+                        if (confirmed is null || !CryptographicOperations.FixedTimeEquals(confirmed, candidate))
+                            throw new IOException("Die übernommene Tor-Adresse konnte nicht bestätigt werden.");
+                        token.ThrowIfCancellationRequested();
+                        legacy.RetireImportedKey(candidate);
+                    }
+                    finally { Clear(confirmed); }
+                }
+            }
+
+            lock (state)
+            {
+                token.ThrowIfCancellationRequested();
+                owner = identity;
+                ready = new OnionEndpoint(port, $"{address}:{OnionEndpoint.ChatPort}");
+                running = session;
+                session = null;
+                return ready;
             }
         }
-        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-        {
-            Dispose();
-            throw new IOException($"Tor wurde innerhalb von zwei Minuten nicht bereit (zuletzt {percentage} %). Prüfe unter „Verbindung → Tor starten und prüfen“, ob dein Netz Tor zulässt.");
-        }
-        catch
-        {
-            Dispose();
-            throw;
-        }
-    }
-
-    private static async Task<string> RegisterOnionAsync(ControlConnection connection, OnionKeyStore keys,
-        bool requireExisting, CancellationToken token)
-    {
-        string? previousAddress = keys.ReadLegacyAddress();
-        byte[]? key = keys.ReadKey();
-        try
-        {
-            if (key is null && (requireExisting || previousAddress is not null))
-                throw new IOException("Der Schlüssel der gespeicherten Tor-Adresse fehlt.");
-            string torKey = key is null ? "NEW:ED25519-V3" : "ED25519-V3:" + Convert.ToBase64String(key);
-            var response = await connection.CommandAsync($"ADD_ONION {torKey}"
-                + $" Port={OnionEndpoint.ChatPort},127.0.0.1:{OnionEndpoint.ChatPort}"
-                + $" Port={PresencePort},127.0.0.1:{PresencePort}"
-                + $" Port={ContactRequestPort},127.0.0.1:{ContactRequestPort}", token);
-            string onion = response.GetValueOrDefault("ServiceID") + ".onion";
-            if (!IsHostname(onion) || (previousAddress is not null && previousAddress != onion))
-                throw new IOException("Tor hat eine unerwartete Onion-Adresse gemeldet.");
-            key ??= OnionKeyStore.DecodeTorKey(response.GetValueOrDefault("PrivateKey"));
-            token.ThrowIfCancellationRequested();
-            keys.ProtectAndRetireLegacy(key);
-            return onion;
-        }
         finally
         {
-            if (key is not null) CryptographicOperations.ZeroMemory(key);
+            Clear(previous);
+            Clear(candidate);
+            session?.Dispose();
         }
     }
 
-    private string ReadActiveService()
+    private static async Task<byte[]?> ReadIdentityKeyAsync(OnionIdentity identity, CancellationToken token)
     {
-        string name;
-        try { name = File.ReadAllText(Path.Combine(profile, "onion-active")); }
-        catch (FileNotFoundException) { return "onion"; }
-        if (IsServiceName(name) && name != "onion")
-            return name;
-        throw new IOException("Die gespeicherte Auswahl der Tor-Adresse ist beschädigt.");
+        token.ThrowIfCancellationRequested();
+        var reply = await Engine.Call(new { action = "read_onion_key", path = identity.Path,
+            identity_key = identity.PublicKey }, identity.PasswordBytes(), cancellation: token);
+        if (reply.Ok && (reply.OnionKey is null || reply.OnionKey.Length == 64)) return reply.OnionKey;
+        Clear(reply.OnionKey);
+        throw new IOException("Der Tor-Schlüssel dieser Identität konnte nicht geöffnet werden.");
     }
 
-    private static bool IsServiceName(string name) => name == "onion"
-        || (name.StartsWith("onion-", StringComparison.Ordinal) && Guid.TryParseExact(name[6..], "N", out _));
-
-    internal async Task<OnionEndpoint> RotateAsync(CancellationToken token, bool connectToNetwork = true)
+    private static async Task WriteIdentityKeyAsync(OnionIdentity identity, byte[] key, byte[]? previous,
+        CancellationToken token)
     {
-        Dispose();
-        pendingService = $"onion-{Guid.NewGuid():N}";
-        string selection = Path.Combine(profile, "onion-active");
-        string staged = Path.Combine(profile, $"{pendingService}.selection");
+        token.ThrowIfCancellationRequested();
+        byte[] input = new byte[previous is null ? 64 : 128];
         try
         {
-            OnionEndpoint endpoint = await StartAsync(null, token, connectToNetwork);
-            await File.WriteAllTextAsync(staged, pendingService, token);
-            token.ThrowIfCancellationRequested();
-            File.Move(staged, selection, overwrite: true);
-            return endpoint;
+            key.CopyTo(input, 0);
+            previous?.CopyTo(input, 64);
+            var reply = await Engine.Call(new { action = "write_onion_key", path = identity.Path,
+                identity_key = identity.PublicKey, replace = previous is not null }, identity.PasswordBytes(), input, token);
+            Clear(reply.OnionKey);
+            if (!reply.Ok) throw new IOException("Der Tor-Schlüssel dieser Identität konnte nicht gespeichert werden.");
         }
-        catch
-        {
-            Dispose();
-            throw;
-        }
-        finally
-        {
-            pendingService = null;
-            try { File.Delete(staged); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
+        finally { Clear(input); }
     }
 
-    private async Task WaitForTorAsync(CancellationToken token)
+    private static void Clear(byte[]? bytes)
     {
-        if (process is null || process.HasExited)
-            throw new IOException("Tor wurde beendet. Schließe gegebenenfalls eine andere laufende MSG- oder Tor-Instanz mit demselben Profil.");
-        await Task.Delay(300, token);
+        if (bytes is not null) CryptographicOperations.ZeroMemory(bytes);
+    }
+
+    private static async Task<(string Address, byte[]? Generated)> RegisterOnionAsync(ControlConnection connection,
+        byte[]? key, string? expectedAddress, CancellationToken token)
+    {
+        string torKey = key is null ? "NEW:ED25519-V3" : "ED25519-V3:" + Convert.ToBase64String(key);
+        var response = await connection.CommandAsync($"ADD_ONION {torKey}"
+            + $" Port={OnionEndpoint.ChatPort},127.0.0.1:{OnionEndpoint.ChatPort}"
+            + $" Port={PresencePort},127.0.0.1:{PresencePort}"
+            + $" Port={ContactRequestPort},127.0.0.1:{ContactRequestPort}", token);
+        string address = response.GetValueOrDefault("ServiceID") + ".onion";
+        if (!IsHostname(address) || (expectedAddress is not null && expectedAddress != address))
+            throw new IOException("Tor hat eine unerwartete Onion-Adresse gemeldet.");
+        return (address, key is null ? OnionKeyStore.DecodeTorKey(response.GetValueOrDefault("PrivateKey")) : null);
     }
 
     private static async Task ExtractAsync(string destination, CancellationToken token)
@@ -244,34 +246,157 @@ internal sealed class TorRuntime(string? dataRoot = null) : IOnionTransport, IDi
 
     public void Dispose()
     {
+        lock (state)
+        {
+            lifetime.Cancel();
+            lifetime.Dispose();
+            lifetime = new();
+            Disconnect();
+        }
+    }
+
+    private void Disconnect()
+    {
         ready = null;
-        control?.Dispose();
-        control = null;
-        if (process is not null)
+        owner = null;
+        running?.Dispose();
+        running = null;
+    }
+
+    private sealed class TorSession : IDisposable
+    {
+        private readonly string profile;
+        private readonly FileStream profileLock;
+        private readonly object processLock = new();
+        private DirectoryInfo? scratch;
+        private Process? process;
+        private ControlConnection? control;
+
+        internal TorSession(string profile)
         {
-            try
-            {
-                if (!process.WaitForExit(1000)) process.Kill(entireProcessTree: true);
-                process.WaitForExit(1000);
-            }
-            catch (InvalidOperationException) { }
-            catch (System.ComponentModel.Win32Exception) { }
-            process.Dispose();
-            process = null;
+            this.profile = profile;
+            Directory.CreateDirectory(profile);
+            profileLock = new FileStream(Path.Combine(profile, "onion-store.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
         }
-        if (scratch is not null)
+
+        internal bool IsRunning => process is { HasExited: false };
+        internal ControlConnection Control => control ?? throw new IOException("Tor wurde noch nicht gestartet.");
+
+        internal async Task OpenAsync(CancellationToken token)
         {
-            try
+            scratch = Directory.CreateTempSubdirectory("kryptocore-tor-");
+            string binary = Path.Combine(scratch.FullName, "tor.exe");
+            string config = Path.Combine(scratch.FullName, "torrc");
+            string portFile = Path.Combine(scratch.FullName, "control-port");
+            string cookieFile = Path.Combine(scratch.FullName, "control-cookie");
+            string data = Directory.CreateDirectory(Path.Combine(profile, "tor-data")).FullName;
+            await ExtractAsync(binary, token);
+            await File.WriteAllTextAsync(config, "# Dedicated KryptoCore MSG instance\n", token);
+
+            var start = new ProcessStartInfo(binary)
             {
-                foreach (var file in scratch.GetFiles()) file.Delete();
-                scratch.Delete();
+                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = scratch.FullName,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            foreach (string argument in new[]
+            {
+                "-f", config, "--DataDirectory", data, "--DisableNetwork", "1",
+                "--SocksPort", "auto ExtendedErrors", "--ControlPort", "auto", "--ControlPortWriteToFile", portFile,
+                "--CookieAuthentication", "1", "--CookieAuthFile", cookieFile,
+                "--__OwningControllerProcess", Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
+                "--Log", "warn stdout"
+            }) start.ArgumentList.Add(argument);
+
+            // Keep the verified file open without write or delete sharing until Windows starts it.
+            using (var expected = typeof(TorRuntime).Assembly.GetManifestResourceStream("kryptocore-tor.sha256")
+                ?? throw new IOException("Die Prüfsumme für das eingebettete Tor fehlt."))
+            using (var digest = new StreamReader(expected, Encoding.ASCII))
+            using (var executable = new FileStream(binary, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true))
+            {
+                await VerifyExecutableAsync(executable, (await digest.ReadToEndAsync(token)).Trim(), token);
+                lock (processLock)
+                {
+                    token.ThrowIfCancellationRequested();
+                    process = Process.Start(start) ?? throw new IOException("Tor konnte nicht gestartet werden.");
+                }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-            scratch = null;
+            _ = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+            _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+
+            while (!File.Exists(portFile) || !File.Exists(cookieFile))
+                await WaitForTorAsync(token);
+            string published = (await File.ReadAllTextAsync(portFile, token)).Trim();
+            if (!published.StartsWith("PORT=", StringComparison.Ordinal)
+                || !TryLocalPort(published[5..], out int controlPort))
+                throw new IOException("Tor hat keinen lokalen Steuerport gemeldet.");
+            control = await ControlConnection.OpenAsync(controlPort, cookieFile, token);
         }
-        profileLock?.Dispose();
-        profileLock = null;
+
+        internal async Task<int> WaitForNetworkAsync(Action<int> onProgress, CancellationToken token, bool online)
+        {
+            if (online) await Control.CommandAsync("SETCONF DisableNetwork=0", token);
+            while (true)
+            {
+                var values = await Control.CommandAsync("GETINFO net/listeners/socks status/bootstrap-phase", token);
+                var match = Bootstrap.Match(values.GetValueOrDefault("status/bootstrap-phase") ?? "");
+                int percent = match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+                onProgress(percent);
+                token.ThrowIfCancellationRequested();
+                int port = FindSocksPort(values.GetValueOrDefault("net/listeners/socks"));
+                if (!online || (percent == 100 && port != 0)) return port;
+                await WaitForTorAsync(token);
+            }
+        }
+
+        private async Task WaitForTorAsync(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!IsRunning)
+                throw new IOException("Tor wurde beendet. Schließe gegebenenfalls eine andere MSG-Instanz.");
+            await Task.Delay(300, token);
+        }
+
+        internal void Abort()
+        {
+            lock (processLock)
+            {
+                try { if (process is { HasExited: false }) process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            }
+        }
+
+        public void Dispose()
+        {
+            control?.Dispose();
+            lock (processLock)
+            {
+                if (process is not null)
+                {
+                    try
+                    {
+                        if (!process.WaitForExit(1000)) Abort();
+                        process.WaitForExit(1000);
+                    }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { }
+                    process.Dispose();
+                    process = null;
+                }
+            }
+            if (scratch is not null)
+            {
+                try
+                {
+                    foreach (var file in scratch.GetFiles()) file.Delete();
+                    scratch.Delete();
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            profileLock.Dispose();
+        }
     }
 
     private sealed class ControlConnection(TcpClient client) : IDisposable

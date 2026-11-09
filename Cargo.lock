@@ -319,6 +319,7 @@ dependencies = [
 name = "kryptocore-desktop-engine"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "base64ct",
  "kryptocore-container",
  "kryptocore-msg",
  "serde",

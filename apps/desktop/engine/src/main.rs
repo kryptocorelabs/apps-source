@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use base64ct::{Base64, Encoding};
 use kryptocore_container as container;
 use kryptocore_msg as msg;
 use msg::contact::{
@@ -82,6 +83,15 @@ enum Request {
     },
     PublicKey {
         path: PathBuf,
+    },
+    ReadOnionKey {
+        path: PathBuf,
+        identity_key: String,
+    },
+    WriteOnionKey {
+        path: PathBuf,
+        identity_key: String,
+        replace: bool,
     },
     MakeContact {
         key: String,
@@ -229,6 +239,7 @@ struct Outcome {
     ticket: Option<Zeroizing<String>>,
     two_codes: Option<bool>,
     invitation_index: Option<usize>,
+    onion_key: Option<Zeroizing<String>>,
 }
 
 impl Outcome {
@@ -263,6 +274,8 @@ struct Response<'a> {
     two_codes: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     invitation_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    onion_key: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -312,6 +325,20 @@ fn msg_error(error: msg::Error) -> String {
         msg::Error::Io(ref io) if io.kind() == io::ErrorKind::AlreadyExists => "Diese Identitätsdatei existiert bereits.".into(),
         _ => error.to_string(),
     }
+}
+
+fn open_onion_store(
+    path: &Path,
+    password: &[u8],
+    expected_identity: &str,
+) -> Result<msg::OnionKeyStore, String> {
+    let expected = parse_key(expected_identity).map_err(msg_error)?;
+    let identity = msg::Identity::load(path, password).map_err(msg_error)?;
+    if identity.public() != expected {
+        return Err("Die ausgewählte MSG-Identität hat sich geändert. Öffne sie erneut.".into());
+    }
+    msg::OnionKeyStore::open(path, &identity)
+        .map_err(|_| "Die Onion-Schlüsseldatei konnte nicht geöffnet werden.".into())
 }
 
 fn absolute_tool(path: &Path) -> Result<&Path, String> {
@@ -769,6 +796,39 @@ fn execute(request: Request, first: &mut [u8], second: &[u8]) -> Result<Outcome,
                 Some(msg::ContactBook::require_two_codes(&path, &identity).map_err(msg_error)?);
             Ok(outcome)
         }
+        Request::ReadOnionKey { path, identity_key } => {
+            if !second.is_empty() {
+                return Err("Ungültige Eingabe für den Onion-Schlüssel.".into());
+            }
+            let store = open_onion_store(&path, first, &identity_key)?;
+            let key = store.read().map_err(|_| {
+                "Die Onion-Schlüsseldatei ist beschädigt oder gehört zu einer anderen Identität."
+            })?;
+            Ok(Outcome {
+                onion_key: key.map(|key| Zeroizing::new(Base64::encode_string(&key[..]))),
+                ..Outcome::message("Onion-Schlüsseldatei geprüft.")
+            })
+        }
+        Request::WriteOnionKey {
+            path,
+            identity_key,
+            replace,
+        } => {
+            const INVALID: &str = "Ungültige Eingabe für den Onion-Schlüssel.";
+            let (key, remaining) = second
+                .split_first_chunk::<{ msg::ONION_KEY_SIZE }>()
+                .ok_or(INVALID)?;
+            let previous = match (replace, remaining) {
+                (false, []) => None,
+                (true, bytes) => Some(bytes.try_into().map_err(|_| INVALID)?),
+                _ => return Err(INVALID.into()),
+            };
+            let store = open_onion_store(&path, first, &identity_key)?;
+            store.write(key, previous).map_err(|_| {
+                "Der Onion-Schlüssel konnte nicht gespeichert werden. Öffne die Identität erneut und prüfe die Datei und ihre Schreibrechte."
+            })?;
+            Ok(Outcome::message("Onion-Schlüssel verschlüsselt gespeichert."))
+        }
         Request::MakeContact {
             key,
             address,
@@ -1071,6 +1131,7 @@ fn main() -> io::Result<()> {
             ticket: value.ticket.as_deref().map(String::as_str),
             two_codes: value.two_codes,
             invitation_index: value.invitation_index,
+            onion_key: value.onion_key.as_deref().map(String::as_str),
         },
         Err(message) => Response {
             ok: false,
@@ -1082,6 +1143,7 @@ fn main() -> io::Result<()> {
             ticket: None,
             two_codes: None,
             invitation_index: None,
+            onion_key: None,
         },
     };
     let mut stdout = io::stdout().lock();
@@ -1092,6 +1154,41 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onion_key_requests_require_the_pinned_identity_and_exact_key_size() {
+        let directory =
+            std::env::temp_dir().join(format!("msg-onion-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("identity.kcmi");
+        let mut password = *b"only a synthetic test passphrase";
+        let identity = msg::Identity::generate().unwrap();
+        identity.save(&path, &password).unwrap();
+        let identity_key = format_key(&identity.public());
+        let key = [0x25; msg::ONION_KEY_SIZE];
+        let mut run = |action: &str, pin: &str, replace: Option<bool>, secret: &[u8]| {
+            let mut request = serde_json::json!({ "action": action, "path": path, "identity_key": pin });
+            if let Some(replace) = replace {
+                request["replace"] = replace.into();
+            }
+            execute(serde_json::from_value(request).unwrap(), &mut password, secret)
+        };
+        assert!(run("read_onion_key", &identity_key, None, &[])
+            .unwrap()
+            .onion_key
+            .is_none());
+        assert!(run("write_onion_key", &identity_key, Some(false), &key[..63]).is_err());
+        assert!(run("write_onion_key", &identity_key, Some(true), &key).is_err());
+        assert!(run("write_onion_key", &identity_key, Some(false), &key).is_ok());
+        let other_key = format_key(&msg::Identity::generate().unwrap().public());
+        assert!(run("read_onion_key", &other_key, None, &[]).is_err());
+        let reply = run("read_onion_key", &identity_key, None, &[]).unwrap();
+        assert_eq!(
+            reply.onion_key.as_deref().map(String::as_str),
+            Some(Base64::encode_string(&key).as_str())
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn contact_save_preserves_legacy_records_and_tracks_optional_key_comparison() {

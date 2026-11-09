@@ -19,7 +19,8 @@ internal sealed record Reply(
     [property: JsonPropertyName("saved_file")] string? SavedFile = null,
     [property: JsonPropertyName("ticket")] string? Ticket = null,
     [property: JsonPropertyName("two_codes")] bool? TwoCodes = null,
-    [property: JsonPropertyName("invitation_index")] int? InvitationIndex = null);
+    [property: JsonPropertyName("invitation_index")] int? InvitationIndex = null,
+    [property: JsonPropertyName("onion_key")] byte[]? OnionKey = null);
 
 internal static class Engine
 {
@@ -43,6 +44,7 @@ internal static class Engine
         CancellationToken cancellation, Action<string>? onProgress, bool keepInputOpen,
         Action<JsonElement>? onEvent, Action<Func<object, Task>>? onInput)
     {
+        Task<Reply?>? output = null;
         try
         {
             byte[] metadata = JsonSerializer.SerializeToUtf8Bytes(request);
@@ -70,7 +72,7 @@ internal static class Engine
                 catch (InvalidOperationException) { }
                 catch (System.ComponentModel.Win32Exception) { }
             });
-            Task<Reply?> output = onEvent is null
+            output = onEvent is null
                 ? ReadReply(process.StandardOutput, cancellation, onProgress)
                 : ReadEvents(process.StandardOutput, cancellation, null, onEvent);
             // Drain external-tool diagnostics without retaining them.
@@ -99,8 +101,10 @@ internal static class Engine
             await diagnostics;
             if (process.ExitCode != 0)
                 throw new IOException("Die Rust-Engine hat den Vorgang abgebrochen.");
-            return await output
+            Reply reply = await output
                 ?? throw new IOException("Die Rust-Engine hat keine Antwort geliefert.");
+            output = null;
+            return reply;
         }
         catch (IOException) when (cancellation.IsCancellationRequested)
         {
@@ -110,7 +114,18 @@ internal static class Engine
         {
             if (first is not null) CryptographicOperations.ZeroMemory(first);
             if (second is not null) CryptographicOperations.ZeroMemory(second);
+            if (output is not null) _ = ClearDiscardedReplyAsync(output);
         }
+    }
+
+    private static async Task ClearDiscardedReplyAsync(Task<Reply?> output)
+    {
+        try
+        {
+            if ((await output)?.OnionKey is { } key) CryptographicOperations.ZeroMemory(key);
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException or JsonException
+            or OperationCanceledException) { }
     }
 
     private static async Task<Reply?> ReadReply(StreamReader reader, CancellationToken cancellation,

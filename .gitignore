@@ -4,6 +4,8 @@
 **/obj/
 *.kcmi
 *.kcmi.*
+*.onion-key
+*.onion-key.lock
 *.kcc
 *.kcv
 *.kcsk

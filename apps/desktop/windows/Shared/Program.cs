@@ -60,8 +60,9 @@ internal static class Program
 
     private static async Task VerifyTorAsync(string profile, bool online)
     {
+        var first = await CreateTestIdentityAsync(profile, "first");
         using var tor = new TorRuntime(profile);
-        var endpoint = await tor.StartAsync(null, CancellationToken.None, online);
+        var endpoint = await tor.StartAsync(first, null, CancellationToken.None, online);
         Require(endpoint.OnionAddress.EndsWith(".onion:49424", StringComparison.Ordinal), "Invalid onion endpoint.");
         if (online)
         {
@@ -69,23 +70,84 @@ internal static class Program
             return;
         }
 
-        Require(File.Exists(Path.Combine(profile, "onion", ProtectedTorKeyFile)), "New key was not protected.");
-        tor.Dispose();
-        var restarted = await tor.StartAsync(null, CancellationToken.None, connectToNetwork: false);
+        Require(File.Exists(first.Path + ".onion-key"), "The new key was not stored with its identity.");
+        Require(!Directory.EnumerateFiles(profile, ProtectedTorKeyFile, SearchOption.AllDirectories).Any(),
+            "A new onion key was stored under the Windows profile.");
+        tor.Stop();
+        var restarted = await tor.StartAsync(first, null, CancellationToken.None, connectToNetwork: false);
         Require(endpoint.OnionAddress == restarted.OnionAddress, "The new address changed on restart.");
-        var rotated = await tor.RotateAsync(CancellationToken.None, connectToNetwork: false);
+        var second = await CreateTestIdentityAsync(profile, "second");
+        var other = await tor.StartAsync(second, null, CancellationToken.None, connectToNetwork: false);
+        Require(other.OnionAddress != endpoint.OnionAddress, "The second identity inherited the first onion address.");
+        var rotated = await tor.RotateAsync(first, CancellationToken.None, connectToNetwork: false);
         Require(rotated.OnionAddress != endpoint.OnionAddress, "Rotation kept the same address.");
-        tor.Dispose();
+        var unchanged = await tor.StartAsync(second, null, CancellationToken.None, connectToNetwork: false);
+        Require(other.OnionAddress == unchanged.OnionAddress, "Rotation changed the second identity's address.");
+        tor.Stop();
         using (var reopened = new TorRuntime(profile))
         {
-            var persisted = await reopened.StartAsync(null, CancellationToken.None, connectToNetwork: false);
+            var persisted = await reopened.StartAsync(first, null, CancellationToken.None, connectToNetwork: false);
             Require(persisted.OnionAddress == rotated.OnionAddress, "The rotated address changed on restart.");
         }
-        string active = File.ReadAllText(Path.Combine(profile, "onion-active"));
-        Require(File.Exists(Path.Combine(profile, active, ProtectedTorKeyFile)), "Rotated key was not protected.");
+        await VerifyProtectedKeyFailureAsync(tor, first, second);
+        await VerifyIdentityMoveAndCancellationAsync(profile, first, rotated.OnionAddress);
         RequireNoPlaintextTorKeys(profile);
 
         await VerifyLegacyTorProfileAsync(Path.Combine(profile, "legacy-profile"));
+    }
+
+    private static async Task<OnionIdentity> CreateTestIdentityAsync(string profile, string name)
+    {
+        Directory.CreateDirectory(profile);
+        string path = Path.Combine(profile, name + ".kcmi");
+        // This passphrase is used only for the identities generated in the test directory.
+        static byte[] Password() => "onion self-test synthetic passphrase"u8.ToArray();
+        var reply = await Engine.Call(new { action = "new_identity", path }, Password(), Password());
+        if (!reply.Ok || reply.Text is not { Length: 64 } publicKey)
+            throw new IOException("Could not create a synthetic MSG identity.");
+        return new OnionIdentity(path, publicKey, Password);
+    }
+
+    private static async Task VerifyProtectedKeyFailureAsync(TorRuntime tor, OnionIdentity first, OnionIdentity second)
+    {
+        string firstStore = first.Path + ".onion-key";
+        string secondStore = second.Path + ".onion-key";
+        byte[] saved = File.ReadAllBytes(firstStore);
+        byte[] damaged = (byte[])saved.Clone();
+        damaged[^1] ^= 1;
+        File.WriteAllBytes(firstStore, damaged);
+        await RequireFailureAsync(() => tor.StartAsync(first, null, CancellationToken.None, connectToNetwork: false),
+            "Tor opened or replaced a damaged identity key.");
+        Require(File.ReadAllBytes(firstStore).AsSpan().SequenceEqual(damaged), "Tor replaced the damaged identity key.");
+
+        byte[] otherKey = File.ReadAllBytes(secondStore);
+        File.WriteAllBytes(firstStore, otherKey);
+        await RequireFailureAsync(() => tor.StartAsync(first, null, CancellationToken.None, connectToNetwork: false),
+            "An onion key copied from another identity was accepted.");
+        Require(File.ReadAllBytes(firstStore).AsSpan().SequenceEqual(otherKey), "Tor replaced the foreign identity key.");
+        File.WriteAllBytes(firstStore, saved);
+    }
+
+    private static async Task VerifyIdentityMoveAndCancellationAsync(string profile, OnionIdentity original, string address)
+    {
+        string destination = Directory.CreateDirectory(Path.Combine(profile, "moved")).FullName;
+        string path = Path.Combine(destination, "restored.kcmi");
+        File.Copy(original.Path, path);
+        File.Copy(original.Path + ".onion-key", path + ".onion-key");
+        using var tor = new TorRuntime(destination);
+        var moved = await tor.StartAsync(original with { Path = path }, null, CancellationToken.None, connectToNetwork: false);
+        Require(moved.OnionAddress == address, "Copying the encrypted identity files changed the address.");
+
+        var cancelled = await CreateTestIdentityAsync(destination, "cancelled");
+        try
+        {
+            await tor.StartAsync(cancelled, _ => tor.Stop(), CancellationToken.None, connectToNetwork: false);
+            throw new IOException("Stopping Tor allowed the pending startup to finish.");
+        }
+        catch (OperationCanceledException) { }
+        Require(!File.Exists(cancelled.Path + ".onion-key"), "Cancelled startup created a new onion key.");
+        var retried = await tor.StartAsync(cancelled, null, CancellationToken.None, connectToNetwork: false);
+        Require(retried.OnionAddress != address, "The next identity inherited a cancelled startup's address.");
     }
 
     private static async Task VerifyLegacyTorProfileAsync(string profile)
@@ -109,33 +171,40 @@ internal static class Program
         File.WriteAllText(Path.Combine(retired, "hostname"), retiredHost + "\n");
         File.WriteAllBytes(Path.Combine(retired, LegacyTorKeyFile), retiredKey);
 
+        var first = await CreateTestIdentityAsync(profile, "import-owner");
+        var second = await CreateTestIdentityAsync(profile, "other");
         using var tor = new TorRuntime(profile);
-        var migrated = await tor.StartAsync(null, CancellationToken.None, connectToNetwork: false);
-        Require(migrated.OnionAddress == selectedHost + ":49424", "Migration changed the selected onion address.");
-        Require(File.ReadAllText(selection) == selectedService, "Migration changed the selected service.");
+        Require(tor.HasLegacyKey, "The legacy address was not detected.");
+        var fresh = await tor.StartAsync(first, null, CancellationToken.None, connectToNetwork: false);
+        Require(fresh.OnionAddress != selectedHost + ":49424", "The previous address was imported without consent.");
+        Require(tor.HasLegacyKey && File.Exists(protectedKey), "Normal startup did not protect and preserve the import source.");
         RequireNoPlaintextTorKeys(profile);
-        byte[] saved = File.ReadAllBytes(protectedKey);
-        Require(saved.Length > 0 && saved.AsSpan().IndexOf(selectedKey.AsSpan(32)) < 0,
-            "Migrated file contains the plaintext key.");
         Require(File.Exists(Path.Combine(retired, ProtectedTorKeyFile)), "The retired key was not protected.");
-        tor.Dispose();
-
-        // Simulate a damaged protected file with plaintext left behind by an interrupted migration.
-        byte[] damaged = (byte[])saved.Clone();
-        damaged[^1] ^= 1;
-        File.WriteAllBytes(protectedKey, damaged);
-        File.WriteAllBytes(legacy, selectedKey);
-        bool rejected = false;
-        try { await tor.StartAsync(null, CancellationToken.None, connectToNetwork: false); }
-        catch (IOException) { rejected = true; }
-        Require(rejected, "Tor opened a damaged key or fell back to plaintext.");
-        Require(File.ReadAllBytes(protectedKey).AsSpan().SequenceEqual(damaged), "Tor replaced the damaged key.");
-        Require(File.ReadAllBytes(legacy).AsSpan().SequenceEqual(selectedKey), "Tor removed the legacy copy after failure.");
-
-        File.WriteAllBytes(protectedKey, saved);
-        var restored = await tor.StartAsync(null, CancellationToken.None, connectToNetwork: false);
-        Require(restored.OnionAddress == migrated.OnionAddress, "Retry changed the migrated address.");
+        // Resume a transfer interrupted between claiming the key and confirming the identity file.
+        File.WriteAllText(Path.Combine(selected, "import-owner"), first.PublicKey);
+        await RequireFailureAsync(() => tor.ImportLegacyAsync(second, CancellationToken.None, connectToNetwork: false),
+            "Another identity could take over an interrupted import.");
+        Require(tor.HasLegacyKey && File.Exists(protectedKey) && !File.Exists(second.Path + ".onion-key"),
+            "A failed takeover changed the import source or the other identity.");
+        var migrated = await tor.ImportLegacyAsync(first, CancellationToken.None, connectToNetwork: false);
+        Require(migrated.OnionAddress == selectedHost + ":49424", "Import changed the selected onion address.");
+        Require(!tor.HasLegacyKey && !File.Exists(protectedKey) && !File.Exists(Path.Combine(selected, "hostname")),
+            "Import did not retire the previous storage.");
+        byte[] stored = File.ReadAllBytes(first.Path + ".onion-key");
+        Require(stored.AsSpan().IndexOf(selectedKey.AsSpan(32)) < 0, "The identity file contains the plaintext onion key.");
+        await RequireFailureAsync(() => tor.ImportLegacyAsync(second, CancellationToken.None, connectToNetwork: false),
+            "The same legacy address could be imported a second time.");
+        Require(!File.Exists(second.Path + ".onion-key"), "A failed import created an onion key for the wrong identity.");
+        var restored = await tor.StartAsync(first, null, CancellationToken.None, connectToNetwork: false);
+        Require(restored.OnionAddress == migrated.OnionAddress, "Restart changed the imported address.");
         RequireNoPlaintextTorKeys(profile);
+    }
+
+    private static async Task RequireFailureAsync(Func<Task<OnionEndpoint>> operation, string message)
+    {
+        try { await operation(); }
+        catch (IOException) { return; }
+        throw new IOException(message);
     }
 
     private static void RequireNoPlaintextTorKeys(string profile) => Require(

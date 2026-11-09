@@ -171,18 +171,25 @@ files closed.
 
 ## Tor and direct connections
 
-The single-file Windows build includes Tor. Messenger protects its onion
-service keys with Windows DPAPI for the current user and stores the encrypted
-files under `%LOCALAPPDATA%\KryptoCore\MSG`. The first successful startup
-migrates keys from earlier Windows builds and keeps the current onion address.
-Older builds cannot use the protected keys. Earlier backups may still contain
-readable keys. Restoring an onion address from a protected copy normally
-requires the original Windows profile. If that profile is lost, create a
-new address and share it with your contacts.
+The single-file Windows build includes Tor. In Tor mode, unlocking a Messenger
+identity starts Tor with that identity's address. Locking Messenger, closing it or
+switching identities stops the previous Tor session. Each identity has its own
+onion address, which survives restarts and public IP changes.
 
-The active onion address survives restarts and public IP changes.
-**Einstellungen → Neue Tor-Adresse erstellen** rotates it. Contacts then
-need the updated address or a fresh invitation.
+The encrypted onion key is stored beside the identity in `.kcmi.onion-key`.
+Back up the identity and this file together to keep the same address when
+restoring or moving it. If the key file is missing, Messenger creates a new
+address the next time Tor starts. **Einstellungen → Neue Tor-Adresse erstellen**
+rotates only the current identity's address. Contacts then need the updated
+address or a fresh invitation.
+
+Earlier Windows previews kept one onion address per Windows profile. To keep
+that address, unlock the identity that should receive it and choose
+**Einstellungen → Frühere Tor-Adresse übernehmen**. Import replaces that
+identity's current onion address and consumes the old profile key after
+verifying the encrypted copy.
+At startup, MSG protects any old plaintext keys with Windows DPAPI in the
+original Windows profile. Earlier backups can still contain readable keys.
 
 Use one Tor-mode MSG window per Windows user profile. Tor needs outbound
 network access. Use **Tor starten und prüfen** under **Einstellungen** to

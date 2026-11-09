@@ -11,6 +11,71 @@ internal sealed class OnionKeyStore(string directory)
     private static readonly byte[] Entropy = "KryptoCore MSG onion key v1"u8.ToArray();
     private readonly string legacyPath = Path.Combine(directory, "hs_ed25519_secret_key");
     private readonly string protectedPath = Path.Combine(directory, "hs_ed25519_secret_key.dpapi");
+    private readonly string importOwnerPath = Path.Combine(directory, "import-owner");
+
+    internal static OnionKeyStore Active(string profile)
+    {
+        byte[]? selection = ReadFile(Path.Combine(profile, "onion-active"), 38);
+        string name = selection is null ? "onion" : Encoding.ASCII.GetString(selection);
+        if (!IsServiceName(name)) throw new IOException("Die gespeicherte Auswahl der Tor-Adresse ist beschädigt.");
+        return new OnionKeyStore(Path.Combine(profile, name));
+    }
+
+    internal static bool HasLegacyKey(string profile)
+    {
+        try
+        {
+            var keys = Active(profile);
+            return CheckPath(keys.protectedPath) || CheckPath(keys.legacyPath);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    internal static void ProtectLegacyProfile(string profile, CancellationToken token)
+    {
+        foreach (string path in Directory.EnumerateDirectories(profile, "onion*"))
+        {
+            token.ThrowIfCancellationRequested();
+            if (IsServiceName(Path.GetFileName(path))) new OnionKeyStore(path).MigrateRetiredKey();
+        }
+    }
+
+    private static bool IsServiceName(string name) => name == "onion"
+        || (name.StartsWith("onion-", StringComparison.Ordinal) && Guid.TryParseExact(name[6..], "N", out _));
+
+    internal void CheckImportOwner(string identity)
+    {
+        CheckPath(directory);
+        byte[]? recorded = ReadFile(importOwnerPath, 64);
+        if (recorded is not null && !recorded.AsSpan().SequenceEqual(Encoding.ASCII.GetBytes(identity)))
+            throw new IOException("Die Übernahme dieser früheren Tor-Adresse wurde mit einer anderen Identität begonnen.");
+    }
+
+    internal void ClaimImport(string identity)
+    {
+        CheckImportOwner(identity);
+        if (!CheckPath(importOwnerPath)) WriteNewFile(importOwnerPath, Encoding.ASCII.GetBytes(identity));
+    }
+
+    internal void RetireImportedKey(byte[] key)
+    {
+        ProtectAndRetireLegacy(key);
+        byte[] stored = ReadProtectedKey();
+        try
+        {
+            if (!CryptographicOperations.FixedTimeEquals(key, stored))
+                throw new IOException("Die frühere Tor-Adresse hat sich geändert.");
+            foreach (string name in new[] { "hostname", "hs_ed25519_public_key" })
+            {
+                string path = Path.Combine(directory, name);
+                if (CheckPath(path)) File.Delete(path);
+            }
+            File.Delete(protectedPath);
+            File.Delete(importOwnerPath);
+        }
+        finally { CryptographicOperations.ZeroMemory(stored); }
+    }
 
     internal string? ReadLegacyAddress()
     {
@@ -30,7 +95,7 @@ internal sealed class OnionKeyStore(string directory)
         return CheckPath(protectedPath) ? ReadProtectedKey() : ReadLegacyKey();
     }
 
-    internal void MigrateRetiredKey()
+    private void MigrateRetiredKey()
     {
         CheckPath(directory);
         byte[]? key = ReadLegacyKey();
@@ -39,7 +104,7 @@ internal sealed class OnionKeyStore(string directory)
         finally { CryptographicOperations.ZeroMemory(key); }
     }
 
-    internal void ProtectAndRetireLegacy(byte[] key)
+    private void ProtectAndRetireLegacy(byte[] key)
     {
         CheckPath(directory);
         byte[]? legacy = ReadLegacyKey();
@@ -118,6 +183,11 @@ internal sealed class OnionKeyStore(string directory)
             throw new IOException("Windows konnte den Tor-Schlüssel nicht schützen.", error);
         }
         Directory.CreateDirectory(directory);
+        WriteNewFile(protectedPath, bytes);
+    }
+
+    private void WriteNewFile(string destination, byte[] bytes)
+    {
         string staged = Path.Combine(directory, $".key-{Guid.NewGuid():N}.tmp");
         bool created = false;
         try
@@ -128,7 +198,7 @@ internal sealed class OnionKeyStore(string directory)
                 file.Write(bytes);
                 file.Flush(flushToDisk: true);
             }
-            File.Move(staged, protectedPath);
+            File.Move(staged, destination);
         }
         finally
         {

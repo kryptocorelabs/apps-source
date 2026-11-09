@@ -37,11 +37,13 @@ internal static class Program
         {
             Create(alice, "Alice");
             Create(bob, "Bob");
+            string aliceAddress = WaitForOnion(alice);
+            string bobAddress = WaitForOnion(bob);
+            if (aliceAddress == bobAddress) throw new Exception("Independent identities share an onion address");
             Click(bob, "Meine Adresse");
             Wait(() => Field(bob, "contactRequestSession") is not null && Text(bob, "Bereit für Kontaktanfragen."), "Bob reachable", 150);
             AssertSecurity(alice, "Disconnected");
             AssertSecurity(bob, "Disconnected");
-            string bobAddress = ((TextBox)Field(bob, "onionAddress")!).Text;
             Click(alice, "Neuer Kontakt");
             Wait(() => !Busy(alice), "contacts ready");
             Find<TextBox>(alice, "Tor-Adresse des Kontakts").Text = bobAddress;
@@ -207,6 +209,8 @@ internal static class Program
             Click(alice, "MSG sperren");
             AssertSecurity(alice, "Disconnected");
             Wait(() => Text(alice, "MSG ist gesperrt") && Text(bob, "Chatkanal geschlossen"), "lock closes channel");
+            if (OnionAddress(alice).Length != 0 || runtime.GetField("ready", Fields)!.GetValue(Field(alice, "onionTransport")) is not null)
+                throw new Exception("Lock retained the active onion service");
             AssertSecurity(bob, "Disconnected");
             var store = Field(alice, "conversations")!;
             if (((TextBox)Field(alice, "draft")!).CanUndo) throw new Exception("Lock retained draft undo data");
@@ -218,6 +222,7 @@ internal static class Program
             Find<PasswordBox>(alice, "Passphrase deiner Identität").Password = password;
             Click(alice, "Identität öffnen");
             Wait(() => HasChat(alice, "Bob") && !Busy(alice), "reload saved contacts after unlock");
+            if (WaitForOnion(alice) != aliceAddress) throw new Exception("Unlock changed the onion address");
             if (store.GetType().GetMethod("Find", Fields)!.Invoke(store, [bobKey]) is not null
                 || Find<TextBox>(alice, "Nachricht schreiben").Text.Length != 0) throw new Exception("Unlock restored discarded session contents");
             Click(alice, "Mein Profil");
@@ -227,6 +232,9 @@ internal static class Program
             Find<PasswordBox>(alice, "Passphrase wiederholen").Password = password;
             Click(alice, "Identität erstellen");
             Wait(() => !Busy(alice) && !HasChat(alice, "Bob"), "identity switch isolates contact list");
+            string differentAddress = WaitForOnion(alice);
+            if (differentAddress == aliceAddress || differentAddress == bobAddress)
+                throw new Exception("Identity switch retained another profile's onion address");
             Console.WriteLine("Windows preview passed: save contact without key-comparison claim, replies, visible download prompt, decline/save and continued chat.");
         }
         catch
@@ -242,23 +250,29 @@ internal static class Program
 
         Window NewWindow(string name)
         {
-            var tor = Activator.CreateInstance(runtime, Fields, null, [Path.Combine(fixtures.FullName, name)], null)!;
+            var tor = Activator.CreateInstance(runtime, Fields, null, [Path.Combine(fixtures.FullName, name), proxy is null], null)!;
             var w = (Window)Activator.CreateInstance(type, Fields, null, [tor], null)!;
-            if (proxy is not null)
-            {
-                var startup = (Task)runtime.GetMethod("StartAsync", Fields)!.Invoke(tor, [null, CancellationToken.None, false])!;
-                Wait(() => startup.IsCompleted, "offline Tor address", 30);
-                startup.GetAwaiter().GetResult();
-                var endpoint = startup.GetType().GetProperty("Result")!.GetValue(startup)!;
-                string address = (string)endpoint.GetType().GetProperty("OnionAddress")!.GetValue(endpoint)!;
-                proxy.Hosts.Add(address.Split(':')[0]);
-                runtime.GetField("ready", Fields)!.SetValue(tor, Activator.CreateInstance(endpoint.GetType(), Fields, null, [proxy.Port, address], null));
-            }
             w.WindowStartupLocation = WindowStartupLocation.Manual;
             w.Left = -10000; w.Top = -10000;
             w.ShowInTaskbar = false;
             w.Show();
             return w;
+        }
+        string OnionAddress(Window window) => ((TextBox)Field(window, "onionAddress")!).Text;
+        string WaitForOnion(Window window)
+        {
+            Wait(() => OnionAddress(window).EndsWith(".onion:49424", StringComparison.Ordinal),
+                "identity onion address", proxy is null ? 150 : 30);
+            string address = OnionAddress(window);
+            if (proxy is not null)
+            {
+                var tor = Field(window, "onionTransport");
+                var ready = runtime.GetField("ready", Fields)!;
+                var endpoint = ready.GetValue(tor)!;
+                proxy.Hosts.Add(address.Split(':')[0]);
+                ready.SetValue(tor, Activator.CreateInstance(endpoint.GetType(), Fields, null, [proxy.Port, address], null));
+            }
+            return address;
         }
         void Create(Window w, string name)
         {
