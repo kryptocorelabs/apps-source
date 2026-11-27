@@ -20,6 +20,11 @@ internal static class Program
             CheckTorIntegrity(assemblyPath);
             return;
         }
+        if (args is ["--engine-lifecycle", var engineAssembly])
+        {
+            CheckEngineLifecycle(engineAssembly);
+            return;
+        }
         SessionChecks.Run();
         if (args is ["--session-only"]) return;
         var app = new Application();
@@ -315,6 +320,46 @@ internal static class Program
             var closure = Closure(w);
             return (Task)closure.GetType().GetMethods(Fields).Single(m => m.Name.Contains("g__SendAsync|")).Invoke(closure, [path])!;
         }
+    }
+
+    private static void CheckEngineLifecycle(string assemblyPath)
+    {
+        var assembly = Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+        var engine = assembly.GetType("KryptoCore.Desktop.Engine", true)!;
+        var call = engine.GetMethod("Call", BindingFlags.Static | BindingFlags.NonPublic)!;
+        byte[] password = Encoding.UTF8.GetBytes("synthetic credential");
+        byte[] payload = Encoding.UTF8.GetBytes("synthetic sensitive payload");
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var pending = (Task)call.Invoke(null, [new NeverSerialized(), password, payload,
+            cancelled.Token, null, false])!;
+        try
+        {
+            pending.GetAwaiter().GetResult();
+            throw new Exception("Cancelled worker request completed successfully");
+        }
+        catch (OperationCanceledException) { }
+        if (password.Any(value => value != 0) || payload.Any(value => value != 0))
+            throw new Exception("Cancelled worker request retained owned credentials");
+
+        password = Enumerable.Repeat((byte)1, 1025).ToArray();
+        payload = Encoding.UTF8.GetBytes("synthetic rejected payload");
+        pending = (Task)call.Invoke(null, [new { action = "read_contact", code = "synthetic invitation" },
+            password, payload, CancellationToken.None, null, false])!;
+        try
+        {
+            pending.GetAwaiter().GetResult();
+            throw new Exception("Oversized worker credential was accepted");
+        }
+        catch (ArgumentException) { }
+        if (password.Any(value => value != 0) || payload.Any(value => value != 0))
+            throw new Exception("Rejected worker request retained owned credentials");
+        Console.WriteLine("Worker lifecycle passed: early cancellation, size rejection and credential cleanup.");
+    }
+
+    private sealed class NeverSerialized
+    {
+        public string Secret => throw new InvalidOperationException("Cancelled request was serialized");
     }
 
     private static void CheckTorIntegrity(string assemblyPath)

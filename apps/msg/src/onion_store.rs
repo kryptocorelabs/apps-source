@@ -1,7 +1,7 @@
-use crate::{Error, Identity, Result};
+use crate::{regular_store_file, store_lock, Error, Identity, Result};
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    fs::File,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 use subtle::ConstantTimeEq;
@@ -24,13 +24,7 @@ impl OnionKeyStore {
         path.push(".onion-key");
         let mut lock_path = path.clone();
         lock_path.push(".lock");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)?;
-        lock.lock()?;
+        let lock = store_lock(Path::new(&lock_path))?;
         let context = kryptocore::Context::new(
             "org.kryptocorelabs.msg",
             1,
@@ -47,13 +41,9 @@ impl OnionKeyStore {
     }
 
     pub fn read(&self) -> Result<Option<Zeroizing<[u8; ONION_KEY_SIZE]>>> {
-        match fs::symlink_metadata(&self.path) {
-            Ok(metadata) if metadata.is_file() => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-            Ok(_) => return Err(Error::Identity),
-        }
-        let mut file = File::open(&self.path)?;
+        let Some(mut file) = regular_store_file(&self.path)? else {
+            return Ok(None);
+        };
         let metadata = file.metadata()?;
         if !metadata.is_file() || metadata.len() != RECORD_SIZE as u64 {
             return Err(Error::Identity);
@@ -112,6 +102,7 @@ impl OnionKeyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, io};
 
     #[test]
     fn onion_key_is_bound_to_identity_and_portable_with_it() {

@@ -16,6 +16,11 @@ We welcome community testing, code reviews and scrutiny of our security
 assumptions. Please use synthetic data and report suspected vulnerabilities
 privately through the project's security-reporting channel.
 
+The [2026-11-27 hardening review](SECURITY_HARDENING_AUDIT.md) records the
+examined source, changes, tests and unresolved checks. The optional
+[KryptoCore Bridge design](KRYPTOCORE_BRIDGE_DESIGN.md) is a proposal for
+operation-scoped local handoffs with explicit permission.
+
 | Project | Source and build guide | Threat model | User downloads |
 | --- | --- | --- | --- |
 | MSG (experimental) | [apps/msg](apps/msg/README.md) | [Messenger](apps/msg/THREAT_MODEL.md) | [MSG](https://github.com/kryptocorelabs/msg) |
