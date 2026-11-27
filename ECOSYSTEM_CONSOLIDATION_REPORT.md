@@ -1,5 +1,18 @@
 # Ecosystem consolidation report
 
+> **Pre-integration review snapshot.** The branch and main states below record
+> the original review cutoff. The subsequent controlled source integration is
+> tracked in [Core #7](https://github.com/kryptocorelabs/kryptocore/pull/7),
+> [Vault #1](https://github.com/kryptocorelabs/vault-source/pull/1),
+> [Apps #1](https://github.com/kryptocorelabs/apps-source/pull/1),
+> [Labs profile #1](https://github.com/kryptocorelabs/kryptocorelabs/pull/1) and
+> [Container #1](https://github.com/kryptocorelabs/container/pull/1).
+> Those PRs record the accepted hosted-runner capacity exception: unchanged
+> production code already passed complete earlier CI, while current ARM jobs
+> never acquired a runner. They are not passing tests. Source integration does
+> not complete the outstanding release, installed-Firefox or clean-system gates,
+> and does not replace download assets.
+
 Review date 2026-11-27. Work continues on
 `codex/ecosystem-security-hardening-20261127`. This is a maintainer review of
 source, tests and available artifacts. Successful automation is not an
