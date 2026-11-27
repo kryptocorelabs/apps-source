@@ -108,7 +108,7 @@ Dependency advisories are distinguished from demonstrated app exploits.
 | --- | --- | --- | --- |
 | EH-01 | Vault allowed and locked `url` 2.5.8, affected by RUSTSEC-2026-0592. A consumer calling `Url::origin()` on a deeply nested attacker-supplied `blob:` URL can abort its process. Vault's examined origin helper checks HTTP(S) first, so no app exploit was demonstrated. | Medium dependency availability risk | IMPLEMENTED minimum `url=2.5.9`, lock `url 2.5.9` and required `form_urlencoded 1.2.3`. Added rejection regression. Final RustSec check passes. |
 | EH-02 | Python allowed PyNaCl 1.5.0 and the baseline test environment used it. Its bundled libsodium has CVE-2025-69277 point-validation behavior. Two pip-audit IDs alias the same issue. The affected atypical Ed25519 low-level use was not demonstrated through the reference's XChaCha20 path. | Medium dependency hardening | IMPLEMENTED `PyNaCl>=1.6.2`, provider note and isolated-runtime audit CI. TESTED 17 Python cases and both Rust/Python interop cases with 1.6.2. Final runtime audit passes. |
-| EH-03 | MSG sidecar and lock paths could follow static links or accept unsuitable file types before open. A local actor controlling selected directories could redirect reads or block a process. AEAD still binds key and store roles. No decryption bypass was demonstrated. | Low local availability/integrity hardening | IMPLEMENTED regular-file, symlink and Windows reparse checks for contact/policy/trust/block/onion stores and locks, plus post-open metadata checks. Contact writes refuse an existing link. TESTED portable cases. Unix symlink execution remains NOT VERIFIED. |
+| EH-03 | MSG sidecar and lock paths could follow static links or accept unsuitable file types before open. A local actor controlling selected directories could redirect reads or block a process. AEAD still binds key and store roles. No decryption bypass was demonstrated. | Low local availability/integrity hardening | IMPLEMENTED regular-file, symlink and Windows reparse checks for contact/policy/trust/block/onion stores and locks, plus post-open metadata checks. Contact writes refuse an existing link. TESTED portable cases locally and Unix symlink rejection in Linux/macOS CI. |
 | EH-04 | Shared C# worker request serialization retained its owned JSON byte buffer until collection. Some requests can contain an invitation capability. An attacker inspecting local process memory could encounter an additional copy. | Low memory defense | IMPLEMENTED immediate clearing after the frame is sent and finally-path clearing on failure, plus pre-cancellation before worker setup. TESTED cancelled/rejected credential cleanup and actual embedded-worker request. Immutable CLR strings remain outside this clearing guarantee. |
 | EH-05 | Windows did not exercise the Core's existing allocation-rejection regression in CI. Argon2id needs 256 MiB per active derivation. | Low assurance/resource gap | IMPLEMENTED a test-only isolated Windows Job Object runner and CI step. TESTED 192 MiB process commitment limit and the separate two-derivation test. |
 
@@ -199,7 +199,7 @@ argon2-cffi-bindings 26.2.0, cffi 2.1.1 and pycparser 3.12.
 | Final Python reference | PASS 17 | Explicit FutureWarning handling, AEAD negative cases and reference vectors. |
 | Final independent interop | PASS 2 | AEAD Rust/Python in both directions and Ed25519 Rust/PyNaCl. |
 | Concurrent Argon2 and reservation failure | PASS 2 | Explicitly executed normally ignored tests. Two work buffers and isolated Windows commitment rejection. |
-| MSG complete Rust suite | PASS 26 | Includes both new portable storage cases, wrong keys, distinct roles, authenticated legacy migration, rotation, complete attachment framing, ready confirmation and socket replay/tamper tests. Unix-only symlink execution is recorded separately. |
+| MSG complete Rust suite | PASS 26 locally | Includes both new portable storage cases, wrong keys, distinct roles, authenticated legacy migration, rotation, complete attachment framing, ready confirmation and socket replay/tamper tests. Linux/macOS CI also executes the additional Unix-only symlink case. |
 | Desktop engine Rust tests | PASS 2 | Includes identity-pinned onion key requests and exact input-size checks. |
 | Container | PASS 14 | Includes the normally ignored large-file stream test, final-tag/truncation, malicious paths, scan/signature gates and no publication after failure. |
 | Rescue | PASS 12 | Legacy and KCV4 password/recovery-slot export, wrong credentials, explicit plaintext confirmation, no overwrite and input preservation. |
@@ -227,7 +227,8 @@ argon2-cffi-bindings 26.2.0, cffi 2.1.1 and pycparser 3.12.
 | Instrumented AEAD and stream fuzzing | PASS on Linux CI | Core review commit `28a4c1d91728516cbd84e5de42f212a5b16f37ce`, job `fuzz`, run `45983294116`. Local WSL/nightly remain unavailable. |
 | New Python dependency CI | PASS | The `python-audit` job passed on that same Core review commit. |
 | Complete Core CI | PASS | Run `45983294116` completed with 14 successful jobs across Rust/Python, Windows/Linux/macOS, audits, fuzz and artifact comparison. The main-only attestation job is SKIPPED on this review branch. The separate license workflow also passed. |
-| Remaining branch CI/platform checks | NOT VERIFIED while running | Dashboards below identify the exact review branches. A started/queued job is not a passing result. |
+| Complete Apps CI and native Verify matrix | PASS | Source commit `a035ee3668c06afb6a5c3cee6c1f746db5bc6d63`. Applications CI run `45985145976`, Verify run `45985146038` and source scan `45985146004` completed successfully. |
+| Complete Vault CI and desktop matrix | PASS | Source commit `3fd1fe9b2f612757cba0277fb920710b6869e6dc`. Vault CI run `45984534523`, desktop matrix `45984534242` and source scan `45984534225` completed successfully. Main-only Firefox attestation is SKIPPED on this branch. |
 
 Recorded initial failures are not hidden. Sandbox full suites encountered
 socket `PermissionDenied`/Windows error 10013, including the legacy Vault
@@ -267,7 +268,7 @@ profiles remains NOT VERIFIED in this review.
 | Priority | Remaining boundary or action | Status |
 | --- | --- | --- |
 | High | Review branch diffs and run a real signed Firefox installation against the final desktop build. Recheck pairing/navigation and concurrent exact-fill approval across browser processes. Windows Qt, Tor-offline and Messenger loopback checks have passed. | PROPOSED remaining browser installation check |
-| High | Finish Linux/macOS CI including the new Unix link case and inspect failures before merging. The Core instrumented fuzz job has passed. | PROPOSED completion, remaining results NOT VERIFIED |
+| High | Review and merge the tested branches only after maintainer approval. Core, Vault and Apps CI have completed, including the new Unix link case and instrumented Core fuzzing. | TESTED source, PROPOSED merge |
 | High | Arrange an independent review of Core, format readers, Firefox channel and app memory boundaries before expanding safety claims. | PROPOSED |
 | Medium | Treat user-selected output parents as private. Windows staging inherits parent ACLs. Static path checks do not defeat an actor concurrently replacing user-controlled paths. Evaluate handle-relative filesystem operations as a separate platform change. | VERIFIED boundary, PROPOSED follow-up |
 | Medium | Managed strings, Qt/.NET/Python buffers, Tor memory, OS swap, dumps, clipboard history, journals and backups can retain plaintext or keys. A Rust-worker session handle could reduce password lifetime but needs its own replacement/recovery tests. | VERIFIED boundary, PROPOSED architecture work |
@@ -291,16 +292,17 @@ Evidence logs distinguish initial sandbox failures from the later permitted
 successful runs.
 
 Review branches use the same name in each source repository. The Core and
-Vault commits are GitHub-verified. Main and release repositories are unchanged.
-The complete Core test run is successful. Vault and Apps platform workflow
-completion is tracked separately and must not be inferred from that result.
+Vault commits and the tested Apps source commit are GitHub-verified. Main and
+release repositories are unchanged. All eight recorded source workflows have
+completed successfully, with 38 successful jobs and two expected main-only
+attestation skips. The report-only follow-up does not change the tested source.
 
 - [Core changes](https://github.com/kryptocorelabs/kryptocore/compare/main...codex/ecosystem-security-hardening-20261127)
   and [observed Core CI run](https://github.com/kryptocorelabs/kryptocore/actions/runs/45983294116).
 - [Vault changes](https://github.com/kryptocorelabs/vault-source/compare/main...codex/ecosystem-security-hardening-20261127)
-  and [branch CI](https://github.com/kryptocorelabs/vault-source/actions?query=branch%3Acodex%2Fecosystem-security-hardening-20261127).
+  and [observed Vault CI](https://github.com/kryptocorelabs/vault-source/actions/runs/45984534523).
 - [Apps changes](https://github.com/kryptocorelabs/apps-source/compare/main...codex/ecosystem-security-hardening-20261127)
-  and [branch CI](https://github.com/kryptocorelabs/apps-source/actions?query=branch%3Acodex%2Fecosystem-security-hardening-20261127).
+  and [observed Apps CI](https://github.com/kryptocorelabs/apps-source/actions/runs/45985145976).
 
 Only the observed per-job outcomes above are evidence of completed remote
-execution. The dashboards retain queued and future runs separately.
+execution. Future report-only or other branch runs are separate observations.
