@@ -1,7 +1,9 @@
 # KryptoCore Container
 
 Container packages files and folders into a portable, read-only encrypted
-archive. It runs offline. The recipient needs the app and the passphrase.
+archive. It runs offline. A `.kcc` recipient uses Container and the passphrase.
+The optional self-extracting Windows EXE includes its opener and needs no
+separate Container installation.
 This is an alpha for testing with copies; keep the originals.
 
 The Windows app source is in [`windows/`](windows/). Build it with
@@ -15,10 +17,13 @@ Enter to extract into the suggested folder. You can change the destination
 before extracting. You can also drop a `.kcc` file onto the executable.
 
 Use `.kcc` for routine transfers and share the passphrase separately.
-The optional **Erweiterter Export** creates a self-extracting Windows EXE.
-Use it only in controlled workflows where the recipient can verify the whole
-file before execution. The generated EXE is unsigned and launches an embedded
-opener. Rescue can read the payload as data without launching the EXE.
+Under **Erweiterter Export**, **Selbstöffnende Windows-EXE** creates an optional
+self-extracting Windows EXE. The recipient enters its passphrase to extract
+into a new folder. Contained documents or programs are not launched automatically.
+The recipient must trust and verify the entire generated EXE before execution,
+using a separately trusted tool or digest channel. The published opener's hash
+does not cover a newly generated EXE. Generated EXEs are not Authenticode-signed.
+Rescue can read the payload as data without launching the EXE.
 See the [Container threat model](THREAT_MODEL.md).
 
 After saving, choose **Prüfsumme kopieren** to copy the SHA-256 digest of the
@@ -50,7 +55,7 @@ separate trusted channel. Anyone with it can read or recreate a container;
 there is no passphrase recovery. Avoid screen sharing or persistent terminal
 logs when generating a passphrase.
 
-#[Security in 30 seconds](https://github.com/kryptocorelabs/kryptocore/blob/main/SECURITY-IN-BRIEF.md) · [Rescue-first guide](https://github.com/kryptocorelabs/kryptocore/blob/main/RESCUE-FIRST.md) · [Verify a download](https://github.com/kryptocorelabs/kryptocore/blob/main/VERIFY-DOWNLOADS.md)
+[Security in 30 seconds](https://github.com/kryptocorelabs/kryptocore/blob/main/SECURITY-IN-BRIEF.md) · [Rescue-first guide](https://github.com/kryptocorelabs/kryptocore/blob/main/RESCUE-FIRST.md) · [Verify a download](https://github.com/kryptocorelabs/kryptocore/blob/main/VERIFY-DOWNLOADS.md)
 
 ## Verify the sender
 

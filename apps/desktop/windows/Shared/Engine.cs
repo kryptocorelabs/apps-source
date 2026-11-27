@@ -45,9 +45,11 @@ internal static class Engine
         Action<JsonElement>? onEvent, Action<Func<object, Task>>? onInput)
     {
         Task<Reply?>? output = null;
+        byte[]? metadata = null;
         try
         {
-            byte[] metadata = JsonSerializer.SerializeToUtf8Bytes(request);
+            cancellation.ThrowIfCancellationRequested();
+            metadata = JsonSerializer.SerializeToUtf8Bytes(request);
             if (metadata.Length > 1024 * 1024 || first?.Length > 1024 || second?.Length > 4096)
                 throw new ArgumentException("Die Eingabe ist zu lang.");
 
@@ -79,6 +81,8 @@ internal static class Engine
             Task diagnostics = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
             using Stream input = process.StandardInput.BaseStream;
             await Frame(input, metadata, cancellation);
+            CryptographicOperations.ZeroMemory(metadata);
+            metadata = null;
             await Frame(input, first ?? [], cancellation);
             await Frame(input, second ?? [], cancellation);
             if (!keepInputOpen) input.Close();
@@ -112,6 +116,7 @@ internal static class Engine
         }
         finally
         {
+            if (metadata is not null) CryptographicOperations.ZeroMemory(metadata);
             if (first is not null) CryptographicOperations.ZeroMemory(first);
             if (second is not null) CryptographicOperations.ZeroMemory(second);
             if (output is not null) _ = ClearDiscardedReplyAsync(output);

@@ -1,6 +1,6 @@
-use crate::{Error, Identity, Result};
+use crate::{regular_leaf, regular_store_file, store_lock, Error, Identity, Result};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
@@ -71,13 +71,7 @@ impl<'a> ContactBook<'a> {
         path.push(suffix);
         let mut lock_path = path.clone();
         lock_path.push(".lock");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)?;
-        lock.lock()?;
+        let lock = store_lock(Path::new(&lock_path))?;
         let context =
             kryptocore::Context::new("org.kryptocorelabs.msg", 2, "sidecar-key", legacy_salt)
                 .map_err(|_| Error::Identity)?;
@@ -92,12 +86,8 @@ impl<'a> ContactBook<'a> {
     }
 
     pub fn read(&self) -> Result<Zeroizing<Vec<u8>>> {
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Zeroizing::new(b"[]".to_vec()))
-            }
-            Err(error) => return Err(error.into()),
+        let Some(file) = regular_store_file(&self.path)? else {
+            return Ok(Zeroizing::new(b"[]".to_vec()));
         };
         let mut data = Vec::new();
         file.take((LIMIT + 49) as u64).read_to_end(&mut data)?;
@@ -124,6 +114,12 @@ impl<'a> ContactBook<'a> {
     pub fn write(&self, contents: &[u8]) -> Result<()> {
         if contents.len() > LIMIT {
             return Err(Error::Identity);
+        }
+        match std::fs::symlink_metadata(&self.path) {
+            Ok(metadata) if regular_leaf(&metadata) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(Error::Identity),
         }
         let (nonce, ciphertext) =
             kryptocore::encrypt(&self.key, contents, HEADER).map_err(|_| Error::Identity)?;

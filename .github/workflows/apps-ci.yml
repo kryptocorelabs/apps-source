@@ -62,6 +62,8 @@ jobs:
           dotnet dist/msg-ui-check/Check.dll --session-only
       - name: Test bundled Tor integrity check
         run: dotnet dist/msg-ui-check/Check.dll --tor-integrity apps/msg/windows/bin/Release/net10.0-windows/KryptoCore-MSG.dll
+      - name: Test worker cancellation and rejected credential cleanup
+        run: dotnet dist/msg-ui-check/Check.dll --engine-lifecycle apps/msg/windows/bin/Release/net10.0-windows/KryptoCore-MSG.dll
       - name: Test attachment confirmation between two Messenger workers
         run: python apps/msg/tests/chat_downloads.py
       - name: Test Container shared signatures and scanner gates

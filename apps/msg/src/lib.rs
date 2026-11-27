@@ -14,11 +14,13 @@ pub mod pairing;
 pub mod presence;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod storage_tests;
 pub mod tor;
 pub mod transport;
 
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     net::TcpStream,
     path::Path,
@@ -75,6 +77,55 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 pub type PublicKey = [u8; 32];
+
+// These leaf checks reject static links and non-files. Callers must still own
+// the parent directory because pathname checks do not prevent local replacement races.
+fn regular_store_file(path: &Path) -> Result<Option<File>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if regular_leaf(&metadata) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => return Err(Error::Identity),
+    }
+    let file = File::open(path)?;
+    if !regular_leaf(&file.metadata()?) {
+        return Err(Error::Identity);
+    }
+    Ok(Some(file))
+}
+
+fn store_lock(path: &Path) -> Result<File> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if regular_leaf(&metadata) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+        Ok(_) => return Err(Error::Identity),
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    if !regular_leaf(&file.metadata()?) {
+        return Err(Error::Identity);
+    }
+    file.lock()?;
+    Ok(file)
+}
+
+fn regular_leaf(metadata: &fs::Metadata) -> bool {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return metadata.file_attributes() & 0x400 == 0;
+    }
+    #[cfg(not(windows))]
+    true
+}
 
 pub struct Identity(Zeroizing<[u8; 32]>);
 

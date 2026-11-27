@@ -1,5 +1,7 @@
 # KryptoCore application source
 
+**One Core. Many Apps. One Community.**
+
 [Security in 30 seconds](SECURITY-IN-BRIEF.md) · [Recover without the main app](RESCUE-FIRST.md) · [Check a download](VERIFY-DOWNLOADS.md)
 
 [![Applications CI](https://github.com/kryptocorelabs/apps-source/actions/workflows/apps-ci.yml/badge.svg)](https://github.com/kryptocorelabs/apps-source/actions/workflows/apps-ci.yml)
@@ -10,11 +12,23 @@ shared Windows worker. First-party code is MIT licensed; dependencies retain
 their own terms. All applications remain development previews without an
 independent security audit.
 
+These apps are part of [KryptoCoreLabs](https://github.com/kryptocorelabs).
+Users keep control of their data and keys without mandatory cloud accounts,
+telemetry or subscriptions. Local encryption comes from the shared Rust Core;
+apps own their formats, permissions and workflows. Messenger uses Snow for its
+Noise sessions and Tor for transport and requires both peers to be online.
+
 Testing to date has been carried out by the KryptoCoreLabs maintainers, locally
 and through automated CI. No independent security audit has been completed.
 We welcome community testing, code reviews and scrutiny of our security
 assumptions. Please use synthetic data and report suspected vulnerabilities
 privately through the project's security-reporting channel.
+
+The [2026-11-27 hardening review](SECURITY_HARDENING_AUDIT.md) records the
+examined source, changes, tests and unresolved checks. The
+[ecosystem consolidation report](ECOSYSTEM_CONSOLIDATION_REPORT.md) records the
+Core contract, actual Vault/Container workflow checks and the remaining gates.
+Architecture proposals in this repository are separate from implemented apps.
 
 | Project | Source and build guide | Threat model | User downloads |
 | --- | --- | --- | --- |
@@ -50,8 +64,11 @@ See [desktop builds](apps/desktop/README.md) and
 Tor bundle described there; application users do not install Tor separately.
 Rescue has its own [build script](apps/rescue/build-windows.ps1).
 
-Current development versions: MSG 0.1.0-alpha.2-preview.4,
-Container 0.1.0-alpha.2-preview.1 and Rescue 0.1.0-preview.3.
+Current Windows desktop package versions: MSG 0.1.0-alpha.2-preview.4,
+Container 0.1.0-alpha.2-preview.1 and Rescue 0.1.0-preview.4.
+The native Verify tool is 0.1.0-preview.1. MSG's Rust CLI crate retains its
+separate 0.1.0-alpha.1 version; package and crate versions identify different
+components. Read release manifests for the exact source and artifact.
 Source visibility does not turn previews into supported production releases.
 Never commit real identities, keys, contact codes, vaults, archives or runtime
 stores. Use synthetic fixtures and the private security-reporting route.
